@@ -7,27 +7,41 @@ import { v4 as uuidv4 } from 'uuid';
 // Default to dev so that the playwright vscode extension works
 export const bundleType = () => process.env.BUNDLE || 'dev';
 
+export const getFixturePath = (fixturePath: string) => path.join(__dirname, '..', 'fixtures', fixturePath);
+
 export const loadFixture = async (fixturePath: string) => {
   const buffer = await fs.promises.readFile(path.join(__dirname, '..', 'fixtures', fixturePath));
   return buffer.toString('utf-8');
 };
 
+export const copyFixtureDatabase = async (fixturePath: string, dataPath: string) => {
+  const fixtureDir = path.join(__dirname, '..', 'fixtures', fixturePath);
+
+  if (!fs.existsSync(fixtureDir)) {
+    throw new Error(`Cannot find fixture directory ${fixtureDir}`);
+  }
+
+  await fs.promises.cp(fixtureDir, dataPath, { recursive: true });
+};
+
 export const randomDataPath = () => path.join(os.tmpdir(), 'insomnia-smoke-test', `${uuidv4()}`);
 export const INSOMNIA_DATA_PATH = randomDataPath();
 
+// Packaged app paths
 const pathLookup: Record<string, string> = {
   win32: path.join('win-unpacked', 'Insomnia.exe'),
-  darwin: path.join('mac', 'Insomnia.app', 'Contents', 'MacOS', 'Insomnia'),
+  darwin: path.join('mac-universal', 'Insomnia.app', 'Contents', 'MacOS', 'Insomnia'),
   linux: path.join('linux-unpacked', 'insomnia'),
 };
-const insomniaBinary = path.join('dist', pathLookup[process.platform]);
-const electronBinary = path.join('node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
+export const cwd = path.resolve(__dirname, '..', '..', 'insomnia');
+const repoRoot = path.resolve(__dirname, '..', '..', '..');
+const insomniaBinary = path.join(cwd, 'dist', pathLookup[process.platform]);
+const electronBinary = path.join(repoRoot, 'node_modules', '.bin', process.platform === 'win32' ? 'electron.cmd' : 'electron');
 
 export const executablePath = bundleType() === 'package' ? insomniaBinary : electronBinary;
 
 // NOTE: main.min.js is built by app-build in /build and also by the watcher in /src
 export const mainPath = path.join(bundleType() === 'dev' ? 'src' : 'build', 'main.min.js');
-export const cwd = path.resolve(__dirname, '..', '..', 'insomnia');
 
 const hasMainBeenBuilt = fs.existsSync(path.resolve(cwd, mainPath));
 const hasBinaryBeenBuilt = fs.existsSync(path.resolve(cwd, insomniaBinary));

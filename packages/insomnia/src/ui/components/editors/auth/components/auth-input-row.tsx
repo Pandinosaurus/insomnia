@@ -1,15 +1,16 @@
-import React, { ComponentProps, FC, ReactNode, useCallback } from 'react';
-import { useSelector } from 'react-redux';
+import React, { type ComponentProps, type FC, type ReactNode, useCallback } from 'react';
+import { useRouteLoaderData } from 'react-router-dom';
 import { useToggle } from 'react-use';
 
 import { toKebabCase } from '../../../../../common/misc';
-import { useActiveRequest } from '../../../../hooks/use-active-request';
-import { selectSettings } from '../../../../redux/selectors';
-import { Button } from '../../../base/button';
+import { useRequestGroupPatcher, useRequestPatcher } from '../../../../hooks/use-request';
+import type { RequestLoaderData } from '../../../../routes/request';
+import type { RequestGroupLoaderData } from '../../../../routes/request-group';
+import { useRootLoaderData } from '../../../../routes/root';
 import { OneLineEditor } from '../../../codemirror/one-line-editor';
 import { AuthRow } from './auth-row';
 
-interface Props extends Pick<ComponentProps<typeof OneLineEditor>, 'getAutocompleteConstants' | 'mode'> {
+interface Props extends Pick<ComponentProps<typeof OneLineEditor>, 'getAutocompleteConstants'> {
   label: string;
   property: string;
   help?: ReactNode;
@@ -17,18 +18,23 @@ interface Props extends Pick<ComponentProps<typeof OneLineEditor>, 'getAutocompl
   disabled?: boolean;
 }
 
-export const AuthInputRow: FC<Props> = ({ label, getAutocompleteConstants, property, mask, mode, help, disabled = false }) => {
-  const { showPasswords } = useSelector(selectSettings);
-  const { activeRequest: { authentication }, patchAuth } = useActiveRequest();
-
+export const AuthInputRow: FC<Props> = ({ label, getAutocompleteConstants, property, mask, help, disabled = false }) => {
+  const {
+    settings,
+  } = useRootLoaderData();
+  const { showPasswords } = settings;
+  const reqData = useRouteLoaderData('request/:requestId') as RequestLoaderData;
+  const groupData = useRouteLoaderData('request-group/:requestGroupId') as RequestGroupLoaderData;
+  const patchRequest = useRequestPatcher();
+  const patchRequestGroup = useRequestGroupPatcher();
+  const { authentication, _id } = reqData?.activeRequest || groupData.activeRequestGroup;
+  const patcher = Boolean(reqData) ? patchRequest : patchRequestGroup;
   const [masked, toggleMask] = useToggle(true);
   const canBeMasked = !showPasswords && mask;
   const isMasked = canBeMasked && masked;
 
-  // this handler is needed to ignore the parameters sent by button into onClick...
-  const onClick = useCallback(() => toggleMask(), [toggleMask]);
-
-  const onChange = useCallback((value: string) => patchAuth({ [property]: value }), [patchAuth, property]);
+  const onChange = useCallback((value: string) => patcher(_id, { authentication: { ...authentication, [property]: value } }),
+    [patcher, _id, authentication, property]);
 
   const id = toKebabCase(label);
 
@@ -37,22 +43,20 @@ export const AuthInputRow: FC<Props> = ({ label, getAutocompleteConstants, prope
       <OneLineEditor
         id={id}
         type={isMasked ? 'password' : 'text'}
-        mode={mode}
         onChange={onChange}
-        disabled={authentication.disabled}
         readOnly={disabled}
+        // @ts-expect-error -- garbage abstraction
         defaultValue={authentication[property] || ''}
         getAutocompleteConstants={getAutocompleteConstants}
       />
       {canBeMasked ? (
-        <Button
-          className="btn btn--super-duper-compact pointer"
-          onClick={onClick}
-          value={isMasked}
+        <button
+          className="btn btn--super-super-compact pointer"
+          onClick={toggleMask}
           disabled={disabled}
         >
           {isMasked ? <i className="fa fa-eye" data-testid="reveal-password-icon" /> : <i className="fa fa-eye-slash" data-testid="mask-password-icon" />}
-        </Button>
+        </button>
       ) : null}
     </AuthRow>
   );

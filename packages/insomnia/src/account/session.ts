@@ -1,12 +1,12 @@
-import * as srp from 'srp-js';
-
+import { userSession } from '../models';
+import { insomniaFetch } from '../ui/insomniaFetch';
 import * as crypt from './crypt';
-import * as fetch from './fetch';
 
 type LoginCallback = (isLoggedIn: boolean) => void;
 
 export interface WhoamiResponse {
   sessionAge: number;
+  sessionExpiry: number;
   accountId: string;
   email: string;
   firstName: string;
@@ -37,22 +37,10 @@ export interface SessionData {
   publicKey: JsonWebKey;
   encPrivateKey: crypt.AESMessage;
 }
-
-const loginCallbacks: LoginCallback[] = [];
-
-function _callCallbacks() {
-  const loggedIn = isLoggedIn();
-  console.log('[session] Sync state changed loggedIn=' + loggedIn);
-
-  for (const cb of loginCallbacks) {
-    if (typeof cb === 'function') {
-      cb(loggedIn);
-    }
-  }
-}
-
 export function onLoginLogout(loginCallback: LoginCallback) {
-  loginCallbacks.push(loginCallback);
+  window.main.on('loggedIn', async () => {
+    loginCallback(await isLoggedIn());
+  });
 }
 
 /** Creates a session from a sessionId and derived symmetric key. */
@@ -68,8 +56,9 @@ export async function absorbKey(sessionId: string, key: string) {
     lastName,
   } = await _whoami(sessionId);
   const symmetricKeyStr = crypt.decryptAES(key, JSON.parse(encSymmetricKey));
+
   // Store the information for later
-  setSessionData(
+  await setSessionData(
     sessionId,
     accountId,
     firstName,
@@ -80,60 +69,15 @@ export async function absorbKey(sessionId: string, key: string) {
     JSON.parse(encPrivateKey),
   );
 
-  _callCallbacks();
+  window.main.loginStateChange();
 }
 
-export async function changePasswordWithToken(rawNewPassphrase: string, confirmationCode: string) {
-  // Sanitize inputs
-  const newPassphrase = _sanitizePassphrase(rawNewPassphrase);
-
-  const newEmail = getEmail(); // Use the same one
-
-  if (!newEmail) {
-    throw new Error('Session e-mail unexpectedly not set');
-  }
-
-  // Fetch some things
-  const { saltEnc, encSymmetricKey } = await _whoami();
-  const { saltKey, saltAuth } = await _getAuthSalts(newEmail);
-  // Generate some secrets for the user based on password
-  const newSecret = await crypt.deriveKey(newPassphrase, newEmail, saltEnc);
-  const newAuthSecret = await crypt.deriveKey(newPassphrase, newEmail, saltKey);
-  const newVerifier = srp
-    .computeVerifier(
-      _getSrpParams(),
-      Buffer.from(saltAuth, 'hex'),
-      Buffer.from(newEmail || '', 'utf8'),
-      Buffer.from(newAuthSecret, 'hex'),
-    )
-    .toString('hex');
-  // Re-encrypt existing keys with new secret
-  const symmetricKey = JSON.stringify(_getSymmetricKey());
-  const newEncSymmetricKeyJSON = crypt.encryptAES(newSecret, symmetricKey);
-  const newEncSymmetricKey = JSON.stringify(newEncSymmetricKeyJSON);
-  return fetch.post(
-    '/auth/change-password',
-    {
-      code: confirmationCode,
-      newEmail: newEmail,
-      encSymmetricKey: encSymmetricKey,
-      newVerifier,
-      newEncSymmetricKey,
-    },
-    getCurrentSessionId(),
-  );
+export async function getPublicKey() {
+  return (await getUserSession())?.publicKey;
 }
 
-export function sendPasswordChangeCode() {
-  return fetch.post('/auth/send-password-code', null, getCurrentSessionId());
-}
-
-export function getPublicKey() {
-  return _getSessionData()?.publicKey;
-}
-
-export function getPrivateKey() {
-  const sessionData = _getSessionData();
+export async function getPrivateKey() {
+  const sessionData = await getUserSession();
 
   if (!sessionData) {
     throw new Error("Can't get private key: session is blank.");
@@ -146,60 +90,47 @@ export function getPrivateKey() {
   }
 
   const privateKeyStr = crypt.decryptAES(symmetricKey, encPrivateKey);
-  return JSON.parse(privateKeyStr);
+  return JSON.parse(privateKeyStr) as JsonWebKey;
 }
 
-export function getCurrentSessionId() {
-  if (window) {
-    return window.localStorage.getItem('currentSessionId');
-  } else {
-    return '';
-  }
+export async function getCurrentSessionId() {
+  const { id } = await userSession.getOrCreate();
+  return id;
 }
 
-export function getAccountId() {
-  return _getSessionData()?.accountId;
-}
-
-export function getEmail() {
-  return _getSessionData()?.email;
-}
-
-export function getFirstName() {
-  return _getSessionData()?.firstName;
-}
-
-export function getLastName() {
-  return _getSessionData()?.lastName;
-}
-
-export function getFullName() {
-  return `${getFirstName()} ${getLastName()}`.trim();
+export async function getAccountId() {
+  return (await getUserSession())?.accountId;
 }
 
 /** Check if we (think) we have a session */
-export function isLoggedIn() {
-  return !!getCurrentSessionId();
+export async function isLoggedIn() {
+  return Boolean(await getCurrentSessionId());
 }
 
 /** Log out and delete session data */
 export async function logout() {
-  try {
-    await fetch.post('/auth/logout', null, getCurrentSessionId());
-  } catch (error) {
-    // Not a huge deal if this fails, but we don't want it to prevent the
-    // user from signing out.
-    console.warn('Failed to logout', error);
+  const sessionId = await getCurrentSessionId();
+  if (sessionId) {
+    try {
+      insomniaFetch({
+        method: 'POST',
+        path: '/auth/logout',
+        sessionId,
+      });
+    } catch (error) {
+      // Not a huge deal if this fails, but we don't want it to prevent the
+      // user from signing out.
+      console.warn('Failed to logout', error);
+    }
   }
 
   _unsetSessionData();
-
-  _callCallbacks();
+  window.main.loginStateChange();
 }
 
 /** Set data for the new session and store it encrypted with the sessionId */
-export function setSessionData(
-  sessionId: string,
+export async function setSessionData(
+  id: string,
   accountId: string,
   firstName: string,
   lastName: string,
@@ -209,73 +140,92 @@ export function setSessionData(
   encPrivateKey: crypt.AESMessage,
 ) {
   const sessionData: SessionData = {
-    id: sessionId,
-    accountId: accountId,
-    symmetricKey: symmetricKey,
-    publicKey: publicKey,
-    encPrivateKey: encPrivateKey,
-    email: email,
-    firstName: firstName,
-    lastName: lastName,
+    id,
+    accountId,
+    symmetricKey,
+    publicKey,
+    encPrivateKey,
+    email,
+    firstName,
+    lastName,
   };
-  const dataStr = JSON.stringify(sessionData);
-  window.localStorage.setItem(_getSessionKey(sessionId), dataStr);
-  // NOTE: We're setting this last because the stuff above might fail
-  window.localStorage.setItem('currentSessionId', sessionId);
-}
-export async function listTeams() {
-  return fetch.get('/api/teams', getCurrentSessionId());
+
+  const userData = await userSession.getOrCreate();
+  await userSession.update(userData, sessionData);
+
+  return sessionData;
 }
 
 // ~~~~~~~~~~~~~~~~ //
 // Helper Functions //
 // ~~~~~~~~~~~~~~~~ //
-function _getSymmetricKey() {
-  return _getSessionData()?.symmetricKey;
-}
 
-function _whoami(sessionId: string | null = null): Promise<WhoamiResponse> {
-  return fetch.getJson<WhoamiResponse>('/auth/whoami', sessionId || getCurrentSessionId());
-}
-
-function _getAuthSalts(email: string) {
-  return fetch.post(
-    '/auth/login-s',
-    {
-      email,
-    },
-    getCurrentSessionId(),
-  );
-}
-
-const _getSessionData = (): Partial<SessionData> | null => {
-  const sessionId = getCurrentSessionId();
-
-  if (!sessionId || !window) {
-    return {};
+async function _whoami(sessionId: string | null = null): Promise<WhoamiResponse> {
+  const response = await insomniaFetch<WhoamiResponse | string>({
+    method: 'GET',
+    path: '/auth/whoami',
+    sessionId: sessionId || await getCurrentSessionId(),
+  });
+  if (typeof response === 'string') {
+    throw new Error('Unexpected plaintext response: ' + response);
   }
-
-  const dataStr = window.localStorage.getItem(_getSessionKey(sessionId));
-  if (dataStr === null) {
-    return null;
+  if (response && !response?.encSymmetricKey) {
+    throw new Error('Unexpected response: ' + JSON.stringify(response));
   }
-  return JSON.parse(dataStr) as SessionData;
+  return response;
+}
+
+export async function getUserSession(): Promise<SessionData> {
+  const userData = await userSession.getOrCreate();
+
+  return userData;
 };
 
-function _unsetSessionData() {
-  const sessionId = getCurrentSessionId();
-  window.localStorage.removeItem(_getSessionKey(sessionId));
-  window.localStorage.removeItem('currentSessionId');
+async function _unsetSessionData() {
+  await userSession.getOrCreate();
+  await userSession.update(await userSession.getOrCreate(), {
+    id: '',
+    accountId: '',
+    email: '',
+    firstName: '',
+    lastName: '',
+    symmetricKey: {} as JsonWebKey,
+    publicKey: {} as JsonWebKey,
+    encPrivateKey: {} as crypt.AESMessage,
+  });
 }
 
-function _getSessionKey(sessionId: string | null) {
-  return `session__${(sessionId || '').slice(0, 10)}`;
-}
+export async function migrateFromLocalStorage() {
+  const sessionId = window.localStorage.getItem('currentSessionId');
 
-function _getSrpParams() {
-  return srp.params[2048];
-}
+  if (!sessionId) {
+    return;
+  }
 
-function _sanitizePassphrase(passphrase: string) {
-  return passphrase.trim().normalize('NFKD');
+  const sessionKey = `session__${(sessionId || '').slice(0, 10)}`;
+  const session = window.localStorage.getItem(sessionKey);
+
+  if (!session) {
+    return;
+  }
+
+  try {
+    const sessionData = JSON.parse(session) as SessionData;
+
+    const currentUserSession = await userSession.getOrCreate();
+
+    if (currentUserSession.id) {
+      console.warn('Session already exists, skipping migration');
+    } else {
+      await userSession.update(currentUserSession, sessionData);
+    }
+  } catch (e) {
+    console.error('Failed to parse session data', e);
+  } finally {
+    // Clean up local storage session data
+    window.localStorage.removeItem(sessionKey);
+    window.localStorage.removeItem('currentSessionId');
+  }
+
+  return;
 }

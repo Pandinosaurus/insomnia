@@ -1,28 +1,24 @@
-import React, { FC, useCallback } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import React, { type FC, useCallback } from 'react';
+import { useFetcher, useParams } from 'react-router-dom';
 
-import { createRequest } from '../../hooks/create-request';
-import { ForceToWorkspace } from '../../redux/modules/helpers';
-import { importFile } from '../../redux/modules/import';
-import { selectActiveWorkspace, selectSettings } from '../../redux/selectors';
+import { useRootLoaderData } from '../../routes/root';
 import { Hotkey } from '../hotkey';
 import { Pane, PaneBody, PaneHeader } from './pane';
 
 export const PlaceholderRequestPane: FC = () => {
-  const dispatch = useDispatch();
-  const { hotKeyRegistry } = useSelector(selectSettings);
-  const workspaceId = useSelector(selectActiveWorkspace)?._id;
-  const handleImportFile = useCallback(() => dispatch(importFile({ workspaceId, forceToWorkspace: ForceToWorkspace.current })), [workspaceId, dispatch]);
-
-  const createHttpRequest = useCallback(() => {
-    if (workspaceId) {
-      createRequest({
-        requestType: 'HTTP',
-        parentId: workspaceId,
-        workspaceId: workspaceId,
-      });
-    }
-  }, [workspaceId]);
+  const {
+    settings,
+  } = useRootLoaderData();
+  const { hotKeyRegistry } = settings;
+  const requestFetcher = useFetcher();
+  const { organizationId, projectId, workspaceId } = useParams() as { organizationId: string; projectId: string; workspaceId: string };
+  const createHttpRequest = useCallback(() =>
+    requestFetcher.submit({ requestType: 'HTTP', parentId: workspaceId },
+      {
+        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/new`,
+        method: 'post',
+        encType: 'application/json',
+      }), [requestFetcher, organizationId, projectId, workspaceId]);
 
   return (
     <Pane type="request">
@@ -68,9 +64,6 @@ export const PlaceholderRequestPane: FC = () => {
           </table>
 
           <div className="text-center pane__body--placeholder__cta">
-            <button className="btn inline-block btn--clicky" onClick={handleImportFile}>
-              Import from File
-            </button>
             <button className="btn inline-block btn--clicky" onClick={createHttpRequest}>
               New HTTP Request
             </button>

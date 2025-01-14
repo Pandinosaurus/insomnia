@@ -1,14 +1,22 @@
-import { KeyCombination } from 'insomnia-common';
-import path from 'path';
-import { unreachableCase } from 'ts-assert-unreachable';
-
 import appConfig from '../../config/config.json';
 import { version } from '../../package.json';
-import { getDataDirectory, getPortableExecutableDir } from './electron-helpers';
+import type { MockServer } from '../models/mock-server';
+import type { KeyCombination } from './settings';
 
-const env = process['env'];
+// Vite is filtering out process.env variables that are not prefixed with VITE_.
+const ENV = 'env';
 
+const env = process[ENV];
+
+export const INSOMNIA_GITLAB_REDIRECT_URI = env.INSOMNIA_GITLAB_REDIRECT_URI;
+export const INSOMNIA_GITLAB_CLIENT_ID = env.INSOMNIA_GITLAB_CLIENT_ID;
+export const INSOMNIA_GITLAB_API_URL = env.INSOMNIA_GITLAB_API_URL;
+export const PLAYWRIGHT = env.PLAYWRIGHT;
 // App Stuff
+export const getSkipOnboarding = () => env.INSOMNIA_SKIP_ONBOARDING;
+export const getInsomniaSession = () => env.INSOMNIA_SESSION;
+export const getInsomniaSecretKey = () => env.INSOMNIA_SECRET_KEY;
+export const getInsomniaPublicKey = () => env.INSOMNIA_PUBLIC_KEY;
 export const getAppVersion = () => version;
 export const getProductName = () => appConfig.productName;
 export const getAppDefaultTheme = () => appConfig.theme;
@@ -25,20 +33,7 @@ export const isDevelopment = () => getAppEnvironment() === 'development';
 export const getSegmentWriteKey = () => appConfig.segmentWriteKeys[(isDevelopment() || env.PLAYWRIGHT) ? 'development' : 'production'];
 export const getSentryDsn = () => appConfig.sentryDsn;
 export const getAppBuildDate = () => new Date(process.env.BUILD_DATE ?? '').toLocaleDateString();
-export type AuthType =
-  | 'none'
-  | 'oauth2'
-  | 'oauth1'
-  | 'basic'
-  | 'digest'
-  | 'bearer'
-  | 'ntlm'
-  | 'hawk'
-  | 'iam'
-  | 'netrc'
-  | 'asap'
-  | 'sha256'
-  | 'sha1';
+
 export const getBrowserUserAgent = () => encodeURIComponent(
   String(window.navigator.userAgent)
     .replace(new RegExp(`${getAppId()}\\/\\d+\\.\\d+\\.\\d+ `), '')
@@ -52,7 +47,7 @@ export function updatesSupported() {
   }
 
   // Updates are not supported for Windows portable binaries
-  if (isWindows() && getPortableExecutableDir()) {
+  if (isWindows() && process.env['PORTABLE_EXECUTABLE_DIR']) {
     return false;
   }
 
@@ -60,36 +55,17 @@ export function updatesSupported() {
 }
 
 export const getClientString = () => `${getAppEnvironment()}::${getAppPlatform()}::${getAppVersion()}`;
-export const changelogUrl = () => appConfig.changelogUrl;
 
 // Global Stuff
-export const DB_PERSIST_INTERVAL = 1000 * 60 * 30; // Compact every once in a while
 export const DEBOUNCE_MILLIS = 100;
-export const REQUEST_TIME_TO_SHOW_COUNTER = 1; // Seconds
 
-/**
- * A number in milliseconds representing the time required to setup and teardown a request.
- *
- * Should not be used for anything a user may rely on for performance metrics of any kind.
- *
- * While this isn't a perfect "magic-number" (it can be as low as 120ms and as high as 300) it serves as a rough average.
- *
- * For initial introduction, see https://github.com/Kong/insomnia/blob/8aa274d21b351c4710f0bb833cba7deea3d56c29/app/ui/components/ResponsePane.js#L100
-*/
-export const REQUEST_SETUP_TEARDOWN_COMPENSATION = 200;
+export const CDN_INVALIDATION_TTL = 10_000; // 10 seconds
+
 export const STATUS_CODE_PLUGIN_ERROR = -222;
 export const LARGE_RESPONSE_MB = 5;
 export const HUGE_RESPONSE_MB = 100;
 export const FLEXIBLE_URL_REGEX = /^(http|https):\/\/[\wàâäèéêëîïôóœùûüÿçÀÂÄÈÉÊËÎÏÔŒÙÛÜŸÇ\-_.]+[/\wàâäèéêëîïôóœùûüÿçÀÂÄÈÉÊËÎÏÔŒÙÛÜŸÇ.\-+=:\][@%^*&!#?;$~'(),]*/;
-export const CHECK_FOR_UPDATES_INTERVAL = 1000 * 60 * 60 * 3; // 3 hours
-export const PLUGIN_PATH = path.join(getDataDirectory(), 'plugins');
-export const AUTOBIND_CFG = {
-  methodsToIgnore: [
-    'UNSAFE_componentWillMount',
-    'UNSAFE_componentWillReceiveProps',
-    'UNSAFE_componentWillUpdate',
-  ],
-};
+export const CHECK_FOR_UPDATES_INTERVAL = 1000 * 60 * 60 * 24;
 
 // Available editor key map
 export enum EditorKeyMap {
@@ -121,7 +97,7 @@ export const displayModifierKey = (key: keyof Omit<KeyCombination, 'keyCode'>) =
       }
 
       if (isWindows()) {
-        // Note: Although this unicode character for the Windows doesn't exist, the the Unicode character U+229E ⊞ SQUARED PLUS is very commonly used for this purpose. For example, Wikipedia uses it as a simulation of the windows logo.  Though, Windows itself uses `Windows` or `Win`, so we'll go with `Win` here.
+        // Note: Although this unicode character for the Windows doesn't exist, the Unicode character U+229E ⊞ SQUARED PLUS is very commonly used for this purpose. For example, Wikipedia uses it as a simulation of the windows logo.  Though, Windows itself uses `Windows` or `Win`, so we'll go with `Win` here.
         // see: https://en.wikipedia.org/wiki/Windows_key
         return 'Win';
       }
@@ -131,7 +107,7 @@ export const displayModifierKey = (key: keyof Omit<KeyCombination, 'keyCode'>) =
       return 'Super';
 
     default:
-      return unreachableCase(key, 'unrecognized key');
+      throw new Error(key + 'unrecognized key');
   }
 };
 
@@ -143,12 +119,29 @@ export enum UpdateURL {
 
 // API
 export const getApiBaseURL = () => env.INSOMNIA_API_URL || 'https://api.insomnia.rest';
+export const getMockServiceURL = () => env.INSOMNIA_MOCK_API_URL || 'https://mock.insomnia.rest';
+
+export const getMockServiceBinURL = (mockServer: MockServer, path: string) => {
+  if (!mockServer.useInsomniaCloud) {
+    return `${mockServer.url}/bin/${mockServer._id}${path}`;
+  } else {
+    const baseUrl = getMockServiceURL();
+    const url = new URL(baseUrl);
+    url.host = mockServer._id.replace('_', '-') + '.' + url.host;
+    return url.origin + path;
+  }
+};
+
+export const getAIServiceURL = () => env.INSOMNIA_AI_URL || 'https://ai-helper.insomnia.rest';
+
+export const getUpdatesBaseURL = () => env.INSOMNIA_UPDATES_URL || 'https://updates.insomnia.rest';
 
 // App website
 export const getAppWebsiteBaseURL = () => env.INSOMNIA_APP_WEBSITE_URL || 'https://app.insomnia.rest';
 
 // GitHub API
-export const getGitHubGraphQLApiURL = () => env.INSOMNIA_GITHUB_API_URL || 'https://api.github.com/graphql';
+export const getGitHubRestApiUrl = () => env.INSOMNIA_GITHUB_REST_API_URL || 'https://api.github.com';
+export const getGitHubGraphQLApiURL = () => env.INSOMNIA_GITHUB_API_URL || `${getGitHubRestApiUrl()}/graphql`;
 
 // SYNC
 export const DEFAULT_BRANCH_NAME = 'master';
@@ -158,21 +151,11 @@ export const PLUGIN_HUB_BASE = 'https://insomnia.rest/plugins';
 export const NPM_PACKAGE_BASE = 'https://www.npmjs.com/package';
 
 // UI Stuf
-export const MAX_SIDEBAR_REMS = 45;
-export const MIN_SIDEBAR_REMS = 0.75;
-export const COLLAPSE_SIDEBAR_REMS = 3;
-export const SIDEBAR_SKINNY_REMS = 10;
-export const MAX_PANE_WIDTH = 0.99;
-export const MIN_PANE_WIDTH = 0.01;
-export const MAX_PANE_HEIGHT = 0.99;
-export const MIN_PANE_HEIGHT = 0.01;
-export const DEFAULT_PANE_WIDTH = 0.5;
-export const DEFAULT_PANE_HEIGHT = 0.5;
-export const DEFAULT_SIDEBAR_WIDTH = 19;
 export const MIN_INTERFACE_FONT_SIZE = 8;
 export const MAX_INTERFACE_FONT_SIZE = 24;
 export const MIN_EDITOR_FONT_SIZE = 8;
 export const MAX_EDITOR_FONT_SIZE = 24;
+export const DEFAULT_SIDEBAR_SIZE = 25;
 
 // Activities
 export type GlobalActivity =
@@ -263,14 +246,15 @@ export const PREVIEW_MODES = Object.keys(previewModeMap) as (keyof typeof previe
 export const CONTENT_TYPE_JSON = 'application/json';
 export const CONTENT_TYPE_PLAINTEXT = 'text/plain';
 export const CONTENT_TYPE_XML = 'application/xml';
-export const CONTENT_TYPE_YAML = 'text/yaml';
+export const CONTENT_TYPE_YAML = 'application/yaml';
+export const CONTENT_TYPE_EVENT_STREAM = 'text/event-stream';
 export const CONTENT_TYPE_EDN = 'application/edn';
 export const CONTENT_TYPE_FORM_URLENCODED = 'application/x-www-form-urlencoded';
 export const CONTENT_TYPE_FORM_DATA = 'multipart/form-data';
 export const CONTENT_TYPE_FILE = 'application/octet-stream';
 export const CONTENT_TYPE_GRAPHQL = 'application/graphql';
 export const CONTENT_TYPE_OTHER = '';
-const contentTypesMap: Record<string, string[]> = {
+export const contentTypesMap: Record<string, string[]> = {
   [CONTENT_TYPE_EDN]: ['EDN', 'EDN'],
   [CONTENT_TYPE_FILE]: ['File', 'Binary File'],
   [CONTENT_TYPE_FORM_DATA]: ['Multipart', 'Multipart Form'],
@@ -285,6 +269,7 @@ const contentTypesMap: Record<string, string[]> = {
 
 // Auth Types
 export const AUTH_NONE = 'none';
+export const AUTH_API_KEY = 'apikey';
 export const AUTH_OAUTH_2 = 'oauth2';
 export const AUTH_OAUTH_1 = 'oauth1';
 export const AUTH_BASIC = 'basic';
@@ -303,6 +288,7 @@ export const JSON_ORDER_PREFIX = '&';
 export const JSON_ORDER_SEPARATOR = '~|';
 
 const authTypesMap: Record<string, string[]> = {
+  [AUTH_API_KEY]: ['API Key', 'API Key Auth'],
   [AUTH_BASIC]: ['Basic', 'Basic Auth'],
   [AUTH_DIGEST]: ['Digest', 'Digest Auth'],
   [AUTH_NTLM]: ['NTLM', 'Microsoft NTLM'],
@@ -313,6 +299,7 @@ const authTypesMap: Record<string, string[]> = {
   [AUTH_AWS_IAM]: ['AWS', 'AWS IAM v4'],
   [AUTH_ASAP]: ['ASAP', 'Atlassian ASAP'],
   [AUTH_NETRC]: ['Netrc', 'Netrc File'],
+  [AUTH_NONE]: ['None', 'No Auth'],
 };
 
 // Sort Orders
@@ -323,7 +310,8 @@ export type SortOrder =
   | 'created-desc'
   | 'http-method'
   | 'type-desc'
-  | 'type-asc';
+  | 'type-asc'
+  | 'type-manual';
 export const SORT_NAME_ASC = 'name-asc';
 export const SORT_NAME_DESC = 'name-desc';
 export const SORT_CREATED_ASC = 'created-asc';
@@ -333,7 +321,9 @@ export const SORT_MODIFIED_DESC = 'modified-desc';
 export const SORT_HTTP_METHOD = 'http-method';
 export const SORT_TYPE_DESC = 'type-desc';
 export const SORT_TYPE_ASC = 'type-asc';
+export const SORT_TYPE_MANUAL = 'type-manual';
 export const SORT_ORDERS = [
+  SORT_TYPE_MANUAL,
   SORT_NAME_ASC,
   SORT_NAME_DESC,
   SORT_CREATED_ASC,
@@ -343,6 +333,7 @@ export const SORT_ORDERS = [
   SORT_TYPE_ASC,
 ] as const;
 export const sortOrderName: Record<SortOrder, string> = {
+  [SORT_TYPE_MANUAL]: 'Manual',
   [SORT_NAME_ASC]: 'Name Ascending (A-Z)',
   [SORT_NAME_DESC]: 'Name Descending (Z-A)',
   [SORT_CREATED_ASC]: 'Oldest First',
@@ -384,24 +375,38 @@ export function getPreviewModeName(previewMode: PreviewMode, useLong = false) {
     return '';
   }
 }
+export function getMimeTypeFromContentType(contentType: string) {
+  // Check if the Content-Type header is provided
+  if (!contentType) {
+    return null;
+  }
 
+  // Split the Content-Type header to separate MIME type from parameters
+  const [mimePart] = contentType.split(';');
+
+  // Trim any extra spaces
+  const mimeType = mimePart.trim();
+
+  return mimeType;
+}
 export function getContentTypeName(contentType?: string | null, useLong = false) {
   if (typeof contentType !== 'string') {
     return '';
   }
-
-  if (contentTypesMap.hasOwnProperty(contentType)) {
-    return useLong ? contentTypesMap[contentType][1] : contentTypesMap[contentType][0];
+  for (const contentTypeKey in contentTypesMap) {
+    if (contentType.includes(contentTypeKey) && contentTypeKey.length > 0) {
+      return useLong ? contentTypesMap[contentTypeKey][1] : contentTypesMap[contentTypeKey][0];
+    }
   }
 
   return useLong ? contentTypesMap[CONTENT_TYPE_OTHER][1] : contentTypesMap[CONTENT_TYPE_OTHER][0];
 }
 
-export function getAuthTypeName(authType: string, useLong = false) {
-  if (authTypesMap.hasOwnProperty(authType)) {
+export function getAuthTypeName(authType?: string, useLong = false) {
+  if (authType && authTypesMap.hasOwnProperty(authType)) {
     return useLong ? authTypesMap[authType][1] : authTypesMap[authType][0];
   } else {
-    return '';
+    return 'Auth';
   }
 }
 
@@ -482,8 +487,11 @@ export const RESPONSE_CODE_DESCRIPTIONS: Record<number, string> = {
   506: 'The server has an internal configuration error: transparent content negotiation for the request results in a circular reference.',
   507: 'The server has an internal configuration error: the chosen variant resource is configured to engage in transparent content negotiation itself, and is therefore not a proper end point in the negotiation process.',
   508: 'The server detected an infinite loop while processing the request.',
+  509: 'The server has exceeded the bandwidth specified by the server administrator; this is often used by shared hosting providers to limit the bandwidth of customers.',
   510: 'Further extensions to the request are required for the server to fulfill it.',
   511: 'The 511 status code indicates that the client needs to authenticate to gain network access.',
+  598: 'Used by some HTTP proxies to signal a network read timeout behind the proxy to a client in front of the proxy.',
+  599: 'An error used by some HTTP proxies to signal a network connect timeout behind the proxy to a client in front of the proxy.',
 };
 
 export const RESPONSE_CODE_REASONS: Record<number, string> = {
@@ -553,8 +561,11 @@ export const RESPONSE_CODE_REASONS: Record<number, string> = {
   506: 'Variant Also Negotiates',
   507: 'Insufficient Storage',
   508: 'Loop Detected',
+  509: 'Bandwidth Limit Exceeded',
   510: 'Not Extended',
   511: 'Network Authentication Required',
+  598: 'Network read timeout error',
+  599: 'Network Connect Timeout Error',
 };
 
 export const WORKSPACE_ID_KEY = '__WORKSPACE_ID__';
@@ -563,6 +574,8 @@ export const EXPORT_TYPE_REQUEST = 'request';
 export const EXPORT_TYPE_GRPC_REQUEST = 'grpc_request';
 export const EXPORT_TYPE_WEBSOCKET_REQUEST = 'websocket_request';
 export const EXPORT_TYPE_WEBSOCKET_PAYLOAD = 'websocket_payload';
+export const EXPORT_TYPE_MOCK_SERVER = 'mock';
+export const EXPORT_TYPE_MOCK_ROUTE = 'mock_route';
 export const EXPORT_TYPE_REQUEST_GROUP = 'request_group';
 export const EXPORT_TYPE_UNIT_TEST_SUITE = 'unit_test_suite';
 export const EXPORT_TYPE_UNIT_TEST = 'unit_test';
@@ -572,3 +585,7 @@ export const EXPORT_TYPE_ENVIRONMENT = 'environment';
 export const EXPORT_TYPE_API_SPEC = 'api_spec';
 export const EXPORT_TYPE_PROTO_FILE = 'proto_file';
 export const EXPORT_TYPE_PROTO_DIRECTORY = 'proto_directory';
+export const EXPORT_TYPE_RUNNER_TEST_RESULT = 'runner_result';
+
+// (ms) curently server timeout is 30s
+export const INSOMNIA_FETCH_TIME_OUT = 30_000;

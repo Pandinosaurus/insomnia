@@ -12,6 +12,7 @@ export const canDuplicate = true;
 export const canSync = true;
 export interface BaseUnitTestSuite {
   name: string;
+  metaSortKey: number;
 }
 
 export type UnitTestSuite = BaseModel & BaseUnitTestSuite;
@@ -23,6 +24,7 @@ export const isUnitTestSuite = (model: Pick<BaseModel, 'type'>): model is UnitTe
 export function init() {
   return {
     name: 'My Test',
+    metaSortKey: -1 * Date.now(),
   };
 }
 
@@ -49,6 +51,12 @@ export function remove(unitTestSuite: UnitTestSuite) {
 export function getByParentId(parentId: string) {
   return db.getWhere<UnitTestSuite>(type, { parentId });
 }
+
+export function findByParentId(parentId: string) {
+  return db.find<UnitTestSuite>(type, { parentId });
+}
+
+export const getById = (_id: string) => db.getWhere<UnitTestSuite>(type, { _id });
 
 export function all() {
   return db.all<UnitTestSuite>(type);

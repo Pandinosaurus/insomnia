@@ -1,5 +1,3 @@
-import { HttpVersions, KeyboardShortcut, Settings as BaseSettings, UpdateChannel } from 'insomnia-common';
-
 import {
   getAppDefaultDarkTheme,
   getAppDefaultLightTheme,
@@ -7,7 +5,7 @@ import {
 } from '../common/constants';
 import { database as db } from '../common/database';
 import * as hotkeys from '../common/hotkeys';
-import { getMonkeyPatchedControlledSettings, omitControlledSettings } from './helpers/settings';
+import { HttpVersions, type KeyboardShortcut, type Settings as BaseSettings, UpdateChannel } from '../common/settings';
 import type { BaseModel } from './index';
 
 export type Settings = BaseModel & BaseSettings;
@@ -28,21 +26,19 @@ export function init(): BaseSettings {
     autoDetectColorScheme: false,
     autoHideMenuBar: false,
     autocompleteDelay: 1200,
-    allowNotificationRequests: true,
     clearOAuth2SessionOnRestart: true,
     darkTheme: getAppDefaultDarkTheme(),
     deviceId: null,
     disableHtmlPreviewJs: false,
-    disablePaidFeatureAds: false,
     disableResponsePreviewLinks: false,
+    disableAppVersionUserAgent: false,
     disableUpdateNotification: false,
     editorFontSize: 11,
     editorIndentSize: 2,
     editorIndentWithTabs: true,
     editorKeyMap: 'default',
     editorLineWrapping: true,
-    enableAnalytics: false,
-    environmentHighlightColorStyle: 'sidebar-indicator',
+    enableAnalytics: true,
     showVariableSourceAndValue: false,
     filterResponsesByEnv: false,
     followRedirects: true,
@@ -51,19 +47,12 @@ export function init(): BaseSettings {
     fontSize: 13,
     fontVariantLigatures: false,
     forceVerticalLayout: false,
-
-    /**
-     * Only existing users updating from an older version should see the analytics prompt.
-     * So by default this flag is set to false, and is toggled to true during initialization for new users.
-     */
-    hasPromptedAnalytics: false,
     hotKeyRegistry: hotkeys.newDefaultRegistry(),
     httpProxy: '',
     httpsProxy: '',
-    incognitoMode: false,
     lightTheme: getAppDefaultLightTheme(),
     maxHistoryResponses: 20,
-    maxRedirects: -1,
+    maxRedirects: 10,
     maxTimelineDataSizeKB: 10,
     noProxy: '',
     nunjucksPowerUserMode: false,
@@ -73,7 +62,8 @@ export function init(): BaseSettings {
     proxyEnabled: false,
     showPasswords: false,
     theme: getAppDefaultTheme(),
-    timeout: 0,
+    // milliseconds
+    timeout: 30_000,
     updateAutomatically: true,
     updateChannel: UpdateChannel.stable,
     useBulkHeaderEditor: false,
@@ -84,8 +74,13 @@ export function init(): BaseSettings {
 }
 
 export function migrate(doc: Settings) {
-  doc = migrateEnsureHotKeys(doc);
-  return doc;
+  try {
+    doc = migrateEnsureHotKeys(doc);
+    return doc;
+  } catch (e) {
+    console.log('[db] Error during settings migration', e);
+    throw e;
+  }
 }
 
 export async function all() {
@@ -95,25 +90,23 @@ export async function all() {
     settingsList = [await getOrCreate()];
   }
 
-  return settingsList.map(getMonkeyPatchedControlledSettings);
+  return settingsList;
 }
 
 async function create() {
   const settings = await db.docCreate<Settings>(type);
-  return getMonkeyPatchedControlledSettings(settings);
+  return settings;
 }
 
 export async function update(settings: Settings, patch: Partial<Settings>) {
-  const sanitizedPatch = omitControlledSettings(settings, patch);
-  const updatedSettings = await db.docUpdate<Settings>(settings, sanitizedPatch);
-  return getMonkeyPatchedControlledSettings(updatedSettings);
+  const updatedSettings = await db.docUpdate<Settings>(settings, patch);
+  return updatedSettings;
 }
 
 export async function patch(patch: Partial<Settings>) {
   const settings = await getOrCreate();
-  const sanitizedPatch = omitControlledSettings(settings, patch);
-  const updatedSettings = await db.docUpdate<Settings>(settings, sanitizedPatch);
-  return getMonkeyPatchedControlledSettings(updatedSettings);
+  const updatedSettings = await db.docUpdate<Settings>(settings, patch);
+  return updatedSettings;
 }
 
 export async function getOrCreate() {
@@ -122,7 +115,13 @@ export async function getOrCreate() {
   if (results.length === 0) {
     return await create();
   }
-  return getMonkeyPatchedControlledSettings(results[0]);
+  return results[0];
+}
+
+export async function get() {
+  const results = await db.all<Settings>(type) || [];
+
+  return results[0];
 }
 
 /**

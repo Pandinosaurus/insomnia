@@ -1,33 +1,23 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import { PluginConfig } from 'insomnia-common';
-import { Button, ToggleSwitch } from 'insomnia-components';
 import * as path from 'path';
-import React, { ChangeEvent, FormEvent, PureComponent } from 'react';
+import React, { type FC, useEffect, useState } from 'react';
+import { Button } from 'react-aria-components';
 
 import {
-  AUTOBIND_CFG,
   NPM_PACKAGE_BASE,
   PLUGIN_HUB_BASE,
-  PLUGIN_PATH,
 } from '../../../common/constants';
 import { docsPlugins } from '../../../common/documentation';
-import { clickLink } from '../../../common/electron-helpers';
-import { delay } from '../../../common/misc';
-import * as models from '../../../models';
-import type { Settings } from '../../../models/settings';
 import { createPlugin } from '../../../plugins/create';
 import type { Plugin } from '../../../plugins/index';
 import { getPlugins } from '../../../plugins/index';
 import { reload } from '../../../templating/index';
+import { useSettingsPatcher } from '../../hooks/use-request';
+import { useRootLoaderData } from '../../routes/root';
 import { CopyButton } from '../base/copy-button';
 import { Link } from '../base/link';
 import { HelpTooltip } from '../help-tooltip';
+import { Icon } from '../icon';
 import { showAlert, showPrompt } from '../modals';
-
-interface Props {
-  settings: Settings;
-}
-
 interface State {
   plugins: Plugin[];
   npmPluginValue: string;
@@ -37,333 +27,254 @@ interface State {
   isRefreshingPlugins: boolean;
 }
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class Plugins extends PureComponent<Props, State> {
-  _isMounted = false;
-
-  state: State = {
+export const Plugins: FC = () => {
+  const [state, setState] = useState<State>({
     plugins: [],
     npmPluginValue: '',
     error: null,
     installPluginErrMsg: '',
     isInstallingFromNpm: false,
     isRefreshingPlugins: false,
-  };
+  });
+  const {
+    plugins,
+    error,
+    installPluginErrMsg,
+    isInstallingFromNpm,
+    isRefreshingPlugins,
+    npmPluginValue,
+  } = state;
+  const {
+    settings,
+  } = useRootLoaderData();
 
-  _handleClearError() {
-    this.setState({ error: null });
-  }
+  useEffect(() => {
+    refreshPlugins();
+  }, []);
 
-  _handleAddNpmPluginChange(event: ChangeEvent<HTMLInputElement>) {
-    if (event.target instanceof HTMLInputElement) {
-      this.setState({
-        npmPluginValue: event.target.value,
-      });
-    }
-  }
-
-  async _handleAddFromNpm(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    this.setState({
-      isInstallingFromNpm: true,
-    });
-    // @ts-expect-error -- TSCONVERSION
-    const newState: State = {
-      isInstallingFromNpm: false,
-      error: null,
-      installPluginErrMsg: '',
-    };
-
-    try {
-      await window.main.installPlugin(this.state.npmPluginValue.trim());
-      await this._handleRefreshPlugins();
-      newState.npmPluginValue = ''; // Clear input if successful install
-    } catch (err) {
-      newState.installPluginErrMsg = `Failed to install ${this.state.npmPluginValue}`;
-      newState.error = err;
-    }
-
-    this.setState(newState);
-  }
-
-  static _handleOpenDirectory(directory: string) {
-    window.shell.showItemInFolder(directory);
-  }
-
-  async _handleRefreshPlugins() {
-    const start = Date.now();
-    this.setState({
-      isRefreshingPlugins: true,
-    });
+  async function refreshPlugins() {
+    setState(state => ({ ...state, isRefreshingPlugins: true }));
     // Get and reload plugins
     const plugins = await getPlugins(true);
     reload();
-    // Delay loading for at least 500ms. UX FTW!
-    const delta = Date.now() - start;
-    await delay(500 - delta);
 
-    if (this._isMounted) {
-      this.setState({
-        plugins,
-        isRefreshingPlugins: false,
-      });
-    }
+    setState(state => ({ ...state, plugins, isRefreshingPlugins: false }));
   }
+  const patchSettings = useSettingsPatcher();
 
-  async _handleClickRefreshPlugins() {
-    await this._handleRefreshPlugins();
-  }
-
-  static _handleClickShowPluginsFolder() {
-    window.shell.showItemInFolder(PLUGIN_PATH);
-  }
-
-  _handleCreatePlugin() {
-    showPrompt({
-      title: 'New Plugin',
-      defaultValue: 'demo-example',
-      placeholder: 'example-name',
-      submitName: 'Generate',
-      label: 'Plugin Name',
-      selectText: true,
-      validate: name =>
-        name.match(/^[a-z][a-z-]*[a-z]$/) ? '' : 'Plugin name must be of format my-plugin-name',
-      onComplete: async name => {
-        // Remove insomnia-plugin- prefix if they accidentally typed it
-        name = name.replace(/^insomnia-plugin-/, '');
-
-        try {
-          await createPlugin(
-            `insomnia-plugin-${name}`,
-            '0.0.1',
-            [
-              '// For help writing plugins, visit the documentation to get started:',
-              `//   ${docsPlugins}`,
-              '',
-              '// TODO: Add plugin code here...',
-            ].join('\n'),
-          );
-        } catch (err) {
-          showAlert({
-            title: 'Failed to Create Plugin',
-            message: err.message,
-          });
-        }
-
-        await this._handleRefreshPlugins();
-      },
-    });
-  }
-
-  componentDidMount() {
-    this._isMounted = true;
-
-    this._handleRefreshPlugins();
-  }
-
-  componentWillUnmount() {
-    this._isMounted = false;
-  }
-
-  async _handleUpdatePluginConfig(pluginName: string, config: PluginConfig) {
-    const { settings } = this.props;
-    await models.settings.update(this.props.settings, {
-      pluginConfig: { ...settings.pluginConfig, [pluginName]: config },
-    });
-  }
-
-  async _togglePluginEnabled(name: string, enabled: boolean, config: PluginConfig) {
-    const newConfig = { ...config, disabled: !enabled };
-
-    if (this._isMounted) {
-      this.setState({
-        isRefreshingPlugins: true,
-      });
-    }
-
-    await this._handleUpdatePluginConfig(name, newConfig);
-    await this._handleRefreshPlugins();
-  }
-
-  renderToggleSwitch(plugin: Plugin) {
-    return (
-      <ToggleSwitch
-        // @ts-expect-error -- TSCONVERSION should this be labelClassName or switchClassName?
-        className="valign-middle"
-        checked={!plugin.config.disabled}
-        disabled={this.state.isRefreshingPlugins}
-        onChange={async checked => {
-          await this._togglePluginEnabled(plugin.name, checked, plugin.config);
-        }}
-      />
-    );
-  }
-
-  renderLink(plugin: Plugin) {
-    const { name } = plugin;
-    const base = /^insomnia-plugin-/.test(name) ? PLUGIN_HUB_BASE : NPM_PACKAGE_BASE;
-    const link = path.join(base, name);
-    return (
-      <a className="space-left" href={link} title={link}>
-        <i className="fa fa-external-link-square" />
-      </a>
-    );
-  }
-
-  render() {
-    const {
-      plugins,
-      error,
-      installPluginErrMsg,
-      isInstallingFromNpm,
-      isRefreshingPlugins,
-      npmPluginValue,
-    } = this.state;
-    return (
-      <div>
-        <p className="notice info no-margin-top">
-          Plugins is still an experimental feature. See{' '}
-          <Link href={docsPlugins}>Documentation</Link> for more info.
-        </p>
-        {plugins.length === 0 ? (
-          <div className="text-center faint italic pad">No Plugins Added</div>
-        ) : (
-          <table className="table--fancy table--striped table--valign-middle margin-top margin-bottom">
-            <thead>
-              <tr>
-                <th>Enable?</th>
-                <th>Name</th>
-                <th>Version</th>
-                <th>Folder</th>
-              </tr>
-            </thead>
-            <tbody>
-              {plugins.map(plugin =>
-                !plugin.directory ? null : (
-                  <tr key={plugin.name}>
-                    <td
-                      style={{
-                        width: '4rem',
+  return (
+    <div>
+      <p className="notice info no-margin-top">
+        Plugins is still an experimental feature. See{' '}
+        <Link href={docsPlugins}>Documentation</Link> for more info.
+      </p>
+      {plugins.length === 0 ? (
+        <div className="text-center faint italic pad">No Plugins Added</div>
+      ) : (
+        <table className="table--fancy table--striped table--valign-middle margin-top margin-bottom">
+          <thead>
+            <tr>
+              <th>Enable?</th>
+              <th>Name</th>
+              <th>Version</th>
+              <th>Folder</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plugins.map(plugin => {
+              const link = path.join(/^insomnia-plugin-/.test(plugin.name) ? PLUGIN_HUB_BASE : NPM_PACKAGE_BASE, plugin.name);
+              return !plugin.directory ? null : (
+                <tr key={plugin.name}>
+                  <td style={{ width: '4rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={!plugin.config.disabled}
+                      disabled={isRefreshingPlugins}
+                      onChange={async event => {
+                        const newConfig = { ...plugin.config, disabled: !event.target.checked };
+                        setState(state => ({ ...state, isRefreshingPlugins: true }));
+                        patchSettings({ pluginConfig: { ...settings.pluginConfig, [plugin.name]: newConfig } });
+                        refreshPlugins();
                       }}
+                    />
+                  </td>
+                  <td>
+                    {plugin.name}
+                    {plugin.description && (
+                      <HelpTooltip info className="space-left">
+                        {plugin.description}
+                      </HelpTooltip>
+                    )}
+                  </td>
+                  <td>
+                    {plugin.version}
+                    <a className="space-left" href={link} title={link}>
+                      <i className="fa fa-external-link-square" />
+                    </a>
+                  </td>
+                  <td
+                    className="no-wrap"
+                    style={{
+                      width: '10rem',
+                    }}
+                  >
+                    <CopyButton
+                      size="small"
+                      variant="contained"
+                      title={plugin.directory}
+                      content={plugin.directory}
                     >
-                      {this.renderToggleSwitch(plugin)}
-                    </td>
-                    <td>
-                      {plugin.name}
-                      {plugin.description && (
-                        <HelpTooltip info className="space-left">
-                          {plugin.description}
-                        </HelpTooltip>
-                      )}
-                    </td>
-                    <td>
-                      {plugin.version}
-                      {this.renderLink(plugin)}
-                    </td>
-                    <td
-                      className="no-wrap"
-                      style={{
-                        width: '10rem',
-                      }}
+                      Copy Path
+                    </CopyButton>{' '}
+                    <Button
+                      onPress={() => window.shell.showItemInFolder(plugin.directory)}
                     >
-                      <CopyButton
-                        size="small"
-                        variant="contained"
-                        title={plugin.directory}
-                        content={plugin.directory}
-                      >
-                        Copy Path
-                      </CopyButton>{' '}
-                      <Button
-                        size="small"
-                        variant="contained"
-                        onClick={Plugins._handleOpenDirectory.bind(this, plugin.directory)}
-                      >
-                        Reveal Folder
-                      </Button>
-                    </td>
-                  </tr>
-                ),
-              )}
-            </tbody>
-          </table>
-        )}
+                      Reveal Folder
+                    </Button>
+                  </td>
+                </tr>
+              );
+            }
+            )}
+          </tbody>
+        </table>
+      )}
 
-        {error && (
-          <div className="notice error text-left margin-bottom">
-            <button className="pull-right icon" onClick={this._handleClearError}>
-              <i className="fa fa-times" />
-            </button>
-            <div className="selectable force-pre-wrap">
-              <b>{installPluginErrMsg}</b>
-              {'\n\nThere may be an issue with the plugin itself, as a note you can discover and install plugins from the '}
-              <a href="https://insomnia.rest/plugins">Plugin Hub.</a>
-              <details>
-                <summary>Additional Information</summary>
-                <pre className="pad-top-sm force-wrap selectable">
-                  <code>{error.stack || error}</code>
-                </pre>
-              </details>
-            </div>
+      {error && (
+        <div className="notice error text-left margin-bottom">
+          <button className="pull-right icon" onClick={() => setState(state => ({ ...state, error: null }))}>
+            <i className="fa fa-times" />
+          </button>
+          <div className="selectable force-pre-wrap">
+            <b>{installPluginErrMsg}</b>
+            <br />
+            Try using the install button on <a href={PLUGIN_HUB_BASE}>Plugin Hub.</a>
+            <details>
+              <summary>Additional Information</summary>
+              <pre className="pad-top-sm force-wrap selectable">
+                <code>{error.stack || error.message}</code>
+              </pre>
+            </details>
           </div>
-        )}
-
-        <form onSubmit={this._handleAddFromNpm}>
-          <div className="form-row">
-            <div className="form-control form-control--outlined">
-              <input
-                onChange={this._handleAddNpmPluginChange}
-                disabled={isInstallingFromNpm}
-                type="text"
-                placeholder="npm-package-name"
-                value={npmPluginValue}
-              />
-            </div>
-            <div className="form-control width-auto">
-              <Button variant="contained" bg="surprise" disabled={isInstallingFromNpm}>
-                {isInstallingFromNpm && <i className="fa fa-refresh fa-spin space-right" />}
-                Install Plugin
-              </Button>
-            </div>
-          </div>
-        </form>
-
-        <hr />
-
-        <div className="text-right">
-          <Button
-            onClick={() => {
-              clickLink('https://insomnia.rest/plugins');
-            }}
-          >
-            Browse Plugin Hub
-          </Button>
-          <Button
-            style={{
-              marginLeft: '0.3em',
-            }}
-            onClick={this._handleCreatePlugin}
-          >Generate New Plugin</Button>
-          <Button
-            style={{
-              marginLeft: '0.3em',
-            }}
-            onClick={Plugins._handleClickShowPluginsFolder}
-          >
-            Reveal Plugins Folder
-          </Button>
-          <Button
-            disabled={isRefreshingPlugins}
-            style={{
-              marginLeft: '0.3em',
-            }}
-            onClick={this._handleClickRefreshPlugins}
-          >
-            Reload Plugins
-            {isRefreshingPlugins && <i className="fa fa-refresh fa-spin space-left" />}
-          </Button>
         </div>
+      )}
+
+      <form
+        onSubmit={async event => {
+          event.preventDefault();
+          setState(state => ({ ...state, isInstallingFromNpm: true }));
+          const newState: Partial<State> = {
+            isInstallingFromNpm: false,
+            error: null,
+            installPluginErrMsg: '',
+          };
+          if (!npmPluginValue.startsWith('insomnia-plugin-')) {
+            newState.installPluginErrMsg = 'Please enter a plugin name starting with insomnia-plugin-';
+            newState.error = new Error('Invalid plugin name');
+            setState(state => ({ ...state, ...newState }));
+            return;
+          }
+          try {
+            await window.main.installPlugin(npmPluginValue.trim());
+            await refreshPlugins();
+            newState.npmPluginValue = ''; // Clear input if successful install
+          } catch (err) {
+            newState.installPluginErrMsg = `Failed to install ${npmPluginValue}. Please contact the plugin author sharing the below stack trace to help them to ensure compatibility with the latest Insomnia.`;
+            newState.error = err;
+          }
+          setState(state => ({ ...state, ...newState }));
+        }}
+      >
+        <div className="form-row">
+          <div className="form-control">
+            <Icon icon='info-circle' className='px-2' />
+            <span>Enter the full name of an npm package beginning with insomnia-plugin-*</span>
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-control form-control--outlined">
+            <input
+              onChange={event => {
+                if (event.target instanceof HTMLInputElement) {
+                  setState(state => ({ ...state, npmPluginValue: event.target.value }));
+                }
+              }}
+              disabled={isInstallingFromNpm}
+              type="text"
+              placeholder="insomnia-plugin-placeholder"
+              value={npmPluginValue}
+            />
+          </div>
+          <div className="form-control width-auto">
+            <Button
+              className="m-1 px-[--padding-md] h-[--line-height-xs] py-1 flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all border border-solid border-[--hl-lg] rounded-[--radius-md]"
+              isDisabled={isInstallingFromNpm}
+              type="submit"
+            >
+              {isInstallingFromNpm && <i className="fa fa-refresh fa-spin space-right" />}
+              Install Plugin
+            </Button>
+          </div>
+        </div>
+      </form >
+      <div className="w-full flex flex-row justify-center mt-2">
+        <Button
+          className="m-1 px-[--padding-md] h-[--line-height-xs] py-1 flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all border border-solid border-[--hl-lg] rounded-[--radius-md]"
+          onPress={() => window.main.openInBrowser(PLUGIN_HUB_BASE)}
+        >
+          Browse Plugin Hub
+        </Button>
+        <Button
+          className="m-1 px-[--padding-md] h-[--line-height-xs] py-1 flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all border border-solid border-[--hl-lg] rounded-[--radius-md]"
+          onPress={() => showPrompt({
+            title: 'New Plugin',
+            defaultValue: 'demo-example',
+            placeholder: 'example-name',
+            submitName: 'Generate',
+            label: 'Plugin Name',
+            selectText: true,
+            validate: name =>
+              name.match(/^[a-z][a-z-]*[a-z]$/) ? '' : 'Plugin name must be of format my-plugin-name',
+            onComplete: async name => {
+              // Remove insomnia-plugin- prefix if they accidentally typed it
+              name = name.replace(/^insomnia-plugin-/, '');
+              try {
+                await createPlugin(
+                  `insomnia-plugin-${name}`,
+                  '0.0.1',
+                  [
+                    '// For help writing plugins, visit the documentation to get started:',
+                    `//   ${docsPlugins}`,
+                    '',
+                    '// TODO: Add plugin code here...',
+                  ].join('\n'),
+                );
+              } catch (err) {
+                console.error(err);
+                showAlert({
+                  title: 'Failed to Create Plugin',
+                  message: err.message,
+                });
+              }
+              refreshPlugins();
+            },
+          })}
+        >Generate New Plugin</Button>
+        <Button
+          className="m-1 px-[--padding-md] h-[--line-height-xs] py-1 flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all border border-solid border-[--hl-lg] rounded-[--radius-md]"
+          onPress={() => window.shell.showItemInFolder(path.join(process.env['INSOMNIA_DATA_PATH'] || window.app.getPath('userData'), 'plugins'))}
+        >
+          Reveal Plugins Folder
+        </Button>
+        <Button
+          isDisabled={isRefreshingPlugins}
+          className="m-1 px-[--padding-md] h-[--line-height-xs] py-1 flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all border border-solid border-[--hl-lg] rounded-[--radius-md]"
+          onPress={() => refreshPlugins()}
+        >
+          Reload Plugins
+          {isRefreshingPlugins && <i className="fa fa-refresh fa-spin space-left" />}
+        </Button>
       </div>
-    );
-  }
-}
+    </div >
+  );
+};

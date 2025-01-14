@@ -1,11 +1,8 @@
-import classnames from 'classnames';
 import highlight from 'highlight.js/lib/common';
-import React, { FC, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { type FC, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
-import { clickLink } from '../../common/electron-helpers';
 import { markdownToHTML } from '../../common/markdown-to-html';
-import { HandleRender } from '../../common/render';
-import { useGatedNunjucks } from '../context/nunjucks/use-gated-nunjucks';
+import type { HandleRender } from '../../common/render';
 
 interface Props {
   markdown: string;
@@ -14,18 +11,16 @@ interface Props {
   heading?: string;
 }
 
-export const MarkdownPreview: FC<Props> = ({ markdown, className, heading }) => {
+export const MarkdownPreview: FC<Props> = ({ markdown, heading }) => {
   const divRef = useRef<HTMLDivElement>(null);
   const [compiled, setCompiled] = useState('');
   const [error, setError] = useState('');
-  const { handleRender } = useGatedNunjucks();
 
   useEffect(() => {
     let shouldUpdate = true;
     const fn = async () => {
       try {
-        const rendered = handleRender ? await handleRender(markdown) : markdown;
-        const compiled = markdownToHTML(rendered);
+        const compiled = markdownToHTML(markdown);
         shouldUpdate && setCompiled(compiled);
         shouldUpdate && setError('');
       } catch (err) {
@@ -37,7 +32,7 @@ export const MarkdownPreview: FC<Props> = ({ markdown, className, heading }) => 
     return () => {
       shouldUpdate = false;
     };
-  }, [handleRender, markdown]);
+  }, [markdown]);
   useLayoutEffect(() => {
     if (!divRef.current) {
       return;
@@ -55,11 +50,11 @@ export const MarkdownPreview: FC<Props> = ({ markdown, className, heading }) => 
   }, [compiled]);
   const _handleClickLink = (event: any) => {
     event.preventDefault();
-    clickLink(event.target.getAttribute('href'));
+    window.main.openInBrowser(event.target.getAttribute('href'));
   };
 
   return (
-    <div ref={divRef} className={classnames('markdown-preview', className)}>
+    <div ref={divRef}>
       {error ? <p className="notice error no-margin">Failed to render: {error}</p> : null}
       <div className="selectable">
         {heading ? <h1 className="markdown-preview__content-title">{heading}</h1> : null}

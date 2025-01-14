@@ -1,71 +1,44 @@
-import { SettingsOfType } from 'insomnia-common';
-import React, { ChangeEventHandler, FC, ReactNode, useCallback } from 'react';
-import { useSelector } from 'react-redux';
-import styled from 'styled-components';
+import React, { type FC, type ReactNode } from 'react';
 
-import { getControlledStatus } from '../../../models/helpers/settings';
-import * as models from '../../../models/index';
-import { selectSettings } from '../../redux/selectors';
+import type { SettingsOfType } from '../../../common/settings';
+import { useSettingsPatcher } from '../../hooks/use-request';
+import { useRootLoaderData } from '../../routes/root';
 import { HelpTooltip } from '../help-tooltip';
-import { ControlledSetting } from './controlled-setting';
-
-const Descriptions = styled.div({
-  fontSize: 'var(--font-size-sm)',
-  opacity: 'var(--opacity-subtle)',
-  paddingLeft: 18,
-  '& *': {
-    marginTop: 'var(--padding-xs)',
-    marginBottom: 'var(--padding-sm)',
-  },
-});
 
 export const BooleanSetting: FC<{
-  /** each element of this array will appear as a paragraph below the setting describing it */
-  descriptions?: string[];
   help?: string;
   label: ReactNode;
   setting: SettingsOfType<boolean>;
+  disabled?: boolean;
 }> = ({
-  descriptions,
   help,
   label,
   setting,
+  disabled = false,
 }) => {
-  const settings = useSelector(selectSettings);
-
+  const {
+    settings,
+  } = useRootLoaderData();
   if (!settings.hasOwnProperty(setting)) {
     throw new Error(`Invalid boolean setting name ${setting}`);
   }
-
-  const { isControlled } = getControlledStatus(settings)(setting);
-
-  const onChange = useCallback<ChangeEventHandler<HTMLInputElement>>(async ({ currentTarget: { checked } }) => {
-    await models.settings.patch({ [setting]: checked });
-  }, [setting]);
+  const patchSettings = useSettingsPatcher();
 
   return (
-    <ControlledSetting setting={setting}>
-      <div className="form-control form-control--thin">
-        <label className="inline-block">
-          {label}
-          {help && <HelpTooltip className="space-left">{help}</HelpTooltip>}
+    <>
+      <div className="">
+        <label className="flex items-center gap-2">
           <input
             checked={Boolean(settings[setting])}
             name={setting}
-            onChange={onChange}
+            onChange={event => patchSettings({ [setting]: event.currentTarget.checked })}
             type="checkbox"
-            disabled={isControlled}
+            disabled={disabled}
           />
+          {label}
+          {help && <HelpTooltip className="space-left">{help}</HelpTooltip>}
         </label>
       </div>
-
-      {descriptions && (
-        <Descriptions>
-          {descriptions.map(description => (
-            <div key={description}>{description}</div>
-          ))}
-        </Descriptions>
-      )}
-    </ControlledSetting>
+    </>
   );
 };

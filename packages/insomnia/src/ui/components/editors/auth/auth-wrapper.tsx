@@ -1,7 +1,8 @@
-import React, { FC, ReactNode } from 'react';
-import { useSelector } from 'react-redux';
+import React, { type FC, type ReactNode } from 'react';
+import { Toolbar } from 'react-aria-components';
 
 import {
+  AUTH_API_KEY,
   AUTH_ASAP,
   AUTH_AWS_IAM,
   AUTH_BASIC,
@@ -13,7 +14,10 @@ import {
   AUTH_OAUTH_1,
   AUTH_OAUTH_2,
 } from '../../../../common/constants';
-import { selectActiveRequest } from '../../../redux/selectors';
+import type { AuthTypes, RequestAuthentication } from '../../../../models/request';
+import { getAuthObjectOrNull } from '../../../../network/authentication';
+import { AuthDropdown } from '../../dropdowns/auth-dropdown';
+import { ApiKeyAuth } from './api-key-auth';
 import { AsapAuth } from './asap-auth';
 import { AWSAuth } from './aws-auth';
 import { BasicAuth } from './basic-auth';
@@ -25,19 +29,14 @@ import { NTLMAuth } from './ntlm-auth';
 import { OAuth1Auth } from './o-auth-1-auth';
 import { OAuth2Auth } from './o-auth-2-auth';
 
-export const AuthWrapper: FC<{ disabled?: boolean }> = ({ disabled = false }) => {
-  const request = useSelector(selectActiveRequest);
-
-  if (!request || !('authentication' in request)) {
-    return null;
-  }
-
-  const { authentication: { type } } = request;
-
+export const AuthWrapper: FC<{ authentication?: RequestAuthentication | {}; disabled?: boolean; authTypes?: AuthTypes[] }> = ({ authentication, disabled = false, authTypes }) => {
+  const type = getAuthObjectOrNull(authentication)?.type || '';
   let authBody: ReactNode = null;
 
   if (type === AUTH_BASIC) {
     authBody = <BasicAuth disabled={disabled} />;
+  } else if (type === AUTH_API_KEY) {
+    authBody = <ApiKeyAuth disabled={disabled} />;
   } else if (type === AUTH_OAUTH_2) {
     authBody = <OAuth2Auth />;
   } else if (type === AUTH_HAWK) {
@@ -58,8 +57,8 @@ export const AuthWrapper: FC<{ disabled?: boolean }> = ({ disabled = false }) =>
     authBody = <AsapAuth />;
   } else {
     authBody = (
-      <div className="vertically-center text-center">
-        <p className="pad super-faint text-sm text-center">
+      <div className="flex w-full h-full select-none items-center justify-center">
+        <p className="text-sm text-center p-4 text-[--hl]">
           <i
             className="fa fa-unlock-alt"
             style={{
@@ -75,5 +74,12 @@ export const AuthWrapper: FC<{ disabled?: boolean }> = ({ disabled = false }) =>
     );
   }
 
-  return <div>{authBody}</div>;
+  return <>
+    <Toolbar className="w-full flex-shrink-0 h-[--line-height-sm] border-b border-solid border-[--hl-md] flex items-center px-2">
+      <AuthDropdown authentication={authentication} authTypes={authTypes} />
+    </Toolbar>
+    <div className='flex-1 overflow-y-auto '>
+    {authBody}
+    </div>
+  </>;
 };

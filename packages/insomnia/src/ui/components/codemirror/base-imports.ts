@@ -16,50 +16,29 @@ import 'codemirror/mode/swift/swift';
 import 'codemirror/mode/yaml/yaml';
 import 'codemirror/addon/display/autorefresh';
 import 'codemirror/addon/dialog/dialog';
-import 'codemirror/addon/dialog/dialog.css';
 import 'codemirror/addon/fold/foldcode';
 import 'codemirror/addon/fold/foldgutter';
-import 'codemirror/addon/fold/foldgutter.css';
 import 'codemirror/addon/fold/brace-fold';
 import 'codemirror/addon/fold/comment-fold';
 import 'codemirror/addon/fold/indent-fold';
 import 'codemirror/addon/fold/xml-fold';
 import 'codemirror/addon/hint/show-hint';
-import 'codemirror/addon/hint/show-hint.css';
 import 'codemirror/addon/comment/comment';
 import 'codemirror/addon/search/search';
 import 'codemirror/addon/search/searchcursor';
 import 'codemirror/addon/edit/matchbrackets';
 import 'codemirror/addon/edit/closebrackets';
 import 'codemirror/addon/search/matchesonscrollbar';
-import 'codemirror/addon/search/matchesonscrollbar.css';
 import 'codemirror/addon/selection/active-line';
 import 'codemirror/addon/selection/selection-pointer';
 import 'codemirror/addon/display/placeholder';
 import 'codemirror/addon/lint/lint';
-
-declare global {
-  // eslint-disable-next-line no-var -- necessary, let will not work here
-  var jsonlint: unknown;
-}
-
-/**/
-/**
- * Unfortunately, the CodeMirror addon for linting makes use of a pattern whereby linting dependencies are required to be attached to `window` (i.e. `global`) at runtime.
- * For that reason, if you search our codebase, you will not find anywhere where these imports are used.
- */
-/**/
-// for the code that uses this json parser, see https://github.com/codemirror/CodeMirror/blob/master/addon/lint/json-lint.js
-import * as jsonlint from 'jsonlint-mod-fixed';
-global.jsonlint = jsonlint;
-import 'codemirror/addon/lint/json-lint';
 
 // for the code that uses this yaml parser, see https://github.com/codemirror/CodeMirror/blob/master/addon/lint/yaml-lint.js
 import * as jsyaml from 'js-yaml';
 global.jsyaml = jsyaml;
 import 'codemirror/addon/lint/yaml-lint';
 /**/
-import 'codemirror/addon/lint/lint.css';
 import 'codemirror/keymap/vim';
 import 'codemirror/keymap/emacs';
 import 'codemirror/keymap/sublime';
@@ -73,11 +52,9 @@ import 'codemirror-graphql/variables/mode';
 import './modes/nunjucks';
 import './modes/curl';
 import './modes/openapi';
-import './lint/openapi';
+import './modes/clojure';
 import './lint/javascript-async-lint';
+import './lint/json-lint';
 import './extensions/autocomplete';
 import './extensions/clickable';
 import './extensions/nunjucks-tags';
-// CSS
-import 'codemirror/lib/codemirror.css';
-import '../../css/editor/index.less';

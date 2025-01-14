@@ -1,13 +1,6 @@
-import React, { FC, useCallback, useEffect, useState } from 'react';
-import { useSelector } from 'react-redux';
-import styled from 'styled-components';
+import React, { type FC, useCallback, useEffect, useState } from 'react';
 
-import { selectSettings } from '../../redux/selectors';
-
-const EyeIcon = styled.i({
-  cursor: 'pointer',
-  paddingRight: 'var(--padding-xs)',
-});
+import { useRootLoaderData } from '../../routes/root';
 
 const MASK_CHARACTER = '•';
 /** randomly get anywhere between 4 and 11 mask characters on each invocation */
@@ -32,7 +25,10 @@ export const PasswordViewer: FC<{
   text,
   maskText = true,
 }) => {
-  const { showPasswords } = useSelector(selectSettings);
+  const {
+    settings,
+  } = useRootLoaderData();
+  const { showPasswords } = settings;
   const [mask, setMask] = useState<string | null>(null);
   useEffect(() => {
     if (maskText) {
@@ -48,10 +44,7 @@ export const PasswordViewer: FC<{
 
   return (
     <span className="monospace">
-      <EyeIcon
-        className={`fa ${textVisible ? 'fa-eye' : 'fa-eye-slash'}`}
-        onClick={toggleVisible}
-      />
+      <i className={`fa ${textVisible ? 'fa-eye' : 'fa-eye-slash'} cursor-pointer pr-[--padding-xs]`} onClick={toggleVisible} />
       {textVisible ? <span className="selectable">{text}</span> : mask}
     </span>
   );

@@ -2,26 +2,9 @@ import react from '@vitejs/plugin-react';
 import { builtinModules } from 'module';
 import path from 'path';
 import { defineConfig } from 'vite';
-import commonjsExternals from 'vite-plugin-commonjs-externals';
 
 import pkg from './package.json';
-
-// The list of packages we want to keep as commonJS require().
-// Must be resolvable import paths, cannot be globs
-// These will be available via Node's require function from the node_modules folder or Node's builtin modules
-const commonjsPackages = [
-  'electron',
-  'electron/main',
-  'electron/common',
-  'electron/renderer',
-  '@getinsomnia/node-libcurl',
-  '@getinsomnia/node-libcurl/dist/enum/CurlAuth',
-  '@getinsomnia/node-libcurl/dist/enum/CurlHttpVersion',
-  '@getinsomnia/node-libcurl/dist/enum/CurlNetrc',
-  'nunjucks/browser/nunjucks',
-  ...Object.keys(pkg.dependencies),
-  ...builtinModules,
-];
+import { electronNodeRequire } from './vite-plugin-electron-node-require';
 
 export default defineConfig(({ mode }) => {
   const __DEV__ = mode !== 'production';
@@ -35,9 +18,6 @@ export default defineConfig(({ mode }) => {
       'process.env.NODE_ENV': JSON.stringify(mode),
       'process.env.INSOMNIA_ENV': JSON.stringify(mode),
     },
-    optimizeDeps: {
-      exclude: commonjsPackages,
-    },
     server: {
       port: pkg.dev['dev-server-port'],
       fs: {
@@ -50,23 +30,41 @@ export default defineConfig(({ mode }) => {
       assetsDir: './',
       brotliSize: false,
       emptyOutDir: false,
-      commonjsOptions: {
-        ignore: commonjsPackages,
+      rollupOptions: {
+        input: {
+          mainWindow: path.join(__dirname, 'src/index.html'),
+          hiddenBrowserWindow: path.join(__dirname, 'src/hidden-window.html'),
+        },
+        external: ['@getinsomnia/node-libcurl'],
       },
     },
+    optimizeDeps: {
+      exclude: ['@getinsomnia/node-libcurl'],
+      // these packages are only used in web worker, Vite won't be able to discover the import on the initial scan，so we need to include them here to let vite pre-bundle them
+      // https://vitejs.dev/guide/dep-pre-bundling.html#customizing-the-behavior
+      include: ['@stoplight/spectral-core', '@stoplight/spectral-ruleset-bundler/with-loader', '@stoplight/spectral-rulesets', 'codemirror-graphql/utils/SchemaReference', 'openapi-types'],
+      force: true,
+    },
     plugins: [
-      commonjsExternals({ externals: commonjsPackages }),
-      react({
-        fastRefresh: __DEV__,
-        jsxRuntime: 'automatic',
-        babel: {
-          plugins: [
-            // We need to have these plugins installed in our dependencies
-            ['@babel/plugin-proposal-decorators', { legacy: true }],
-            ['@babel/plugin-proposal-class-properties', { loose: true }],
-          ],
-        },
+      // Allows us to import modules that will be resolved by Node's require() function.
+      // e.g. import fs from 'fs'; will get transformed to const fs = require('fs'); so that it works in the renderer process.
+      // This is necessary because we use nodeIntegration: true in the renderer process and allow importing modules from node.
+      electronNodeRequire({
+        modules: [
+          'electron',
+          ...Object.keys(pkg.dependencies),
+          ...builtinModules.filter(m => m !== 'buffer'),
+          ...builtinModules.map(m => `node:${m}`),
+        ],
       }),
+      react(),
     ],
+    worker: {
+      plugins: () => [
+        electronNodeRequire({
+          modules: ['fs'],
+        }),
+      ],
+    },
   };
 });

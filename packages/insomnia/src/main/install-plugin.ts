@@ -1,13 +1,11 @@
+import { cp, mkdir, readdir, stat } from 'node:fs/promises';
+
 import childProcess from 'child_process';
 import * as electron from 'electron';
 import { app } from 'electron';
-import fs from 'fs';
-import fsx from 'fs-extra';
-import mkdirp from 'mkdirp';
 import path from 'path';
 
-import { isDevelopment, isWindows, PLUGIN_PATH } from '../common/constants';
-import { getTempDir } from '../common/electron-helpers';
+import { isDevelopment, isWindows } from '../common/constants';
 
 const YARN_DEPRECATED_WARN = /(?<keyword>warning)(?<dependencies>[^>:].+[>:])(?<issue>.+)/;
 
@@ -51,42 +49,38 @@ export default async function(lookupName: string) {
       info = await _isInsomniaPlugin(lookupName);
       // Get actual module name without version suffixes and things
       const moduleName = info.name;
-      const pluginDir = path.join(PLUGIN_PATH, moduleName);
+      const pluginDir = path.join(process.env['INSOMNIA_DATA_PATH'] || electron.app.getPath('userData'), 'plugins', moduleName);
 
       // Make plugin directory
-      mkdirp.sync(pluginDir);
+      await mkdir(pluginDir, { recursive: true });
 
       // Download the module
-      const request = electron.net.request(info.dist.tarball);
-      request.on('error', err => {
+      try {
+        await electron.net.fetch(info.dist.tarball);
+      } catch (err) {
         reject(new Error(`Failed to make plugin request ${info?.dist.tarball}: ${err.message}`));
-      });
+        return;
+      }
 
       const { tmpDir } = await _installPluginToTmpDir(lookupName);
       console.log(`[plugins] Moving plugin from ${tmpDir} to ${pluginDir}`);
 
       // Move entire module to plugins folder
-      fsx.moveSync(
-        path.join(tmpDir, moduleName),
-        pluginDir,
-        { overwrite: true },
-      );
+      await cp(path.join(tmpDir, moduleName), pluginDir, { recursive: true, verbatimSymlinks: true });
 
       // Move each dependency into node_modules folder
       const pluginModulesDir = path.join(pluginDir, 'node_modules');
-      mkdirp.sync(pluginModulesDir);
+      await mkdir(pluginModulesDir, { recursive: true });
 
-      for (const name of fs.readdirSync(tmpDir)) {
-        const src = path.join(tmpDir, name);
-
-        if (name === moduleName || !fs.statSync(src).isDirectory()) {
+      for (const filename of await readdir(tmpDir)) {
+        const src = path.join(tmpDir, filename);
+        const file = await stat(src);
+        if (filename === moduleName || !file.isDirectory()) {
           continue;
         }
 
-        const dest = path.join(pluginModulesDir, name);
-        fsx.moveSync(src, dest, {
-          overwrite: true,
-        });
+        const dest = path.join(pluginModulesDir, filename);
+        await cp(src, dest, { recursive: true, verbatimSymlinks: true });
       }
     } catch (err) {
       reject(err);
@@ -165,9 +159,10 @@ async function _isInsomniaPlugin(lookupName: string) {
 }
 
 async function _installPluginToTmpDir(lookupName: string) {
-  return new Promise<{ tmpDir: string }>((resolve, reject) => {
-    const tmpDir = path.join(getTempDir(), `${lookupName}-${Date.now()}`);
-    mkdirp.sync(tmpDir);
+  return new Promise<{ tmpDir: string }>(async (resolve, reject) => {
+    const tmpDir = path.join(electron.app.getPath('temp'), `${lookupName}-${Date.now()}`);
+    await mkdir(tmpDir, { recursive: true });
+
     console.log(`[plugins] Installing plugin to ${tmpDir}`);
     childProcess.execFile(
       escape(process.execPath),
@@ -196,6 +191,7 @@ async function _installPluginToTmpDir(lookupName: string) {
         },
       },
       (err, stdout, stderr) => {
+        console.log('[plugins] Install complete', { err, stdout, stderr });
         // Check yarn/electron process exit code.
         // In certain environments electron can exit with error even if the command was performed successfully.
         // Checking for success message in output is a workaround for false errors.

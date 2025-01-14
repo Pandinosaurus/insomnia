@@ -1,23 +1,19 @@
+import electron from 'electron';
 import fs from 'fs';
-import mkdirp from 'mkdirp';
 import path from 'path';
-import rimraf from 'rimraf';
-
-import { PLUGIN_PATH } from '../common/constants';
 
 export async function createPlugin(
   moduleName: string,
   version: string,
   mainJs: string,
 ) {
-  const pluginDir = path.join(PLUGIN_PATH, moduleName);
+  const pluginDir = path.join(process.env['INSOMNIA_DATA_PATH'] || (process.type === 'renderer' ? window : electron).app.getPath('userData'), 'plugins', moduleName);
 
   if (fs.existsSync(pluginDir)) {
     throw new Error(`Plugin already exists at "${pluginDir}"`);
   }
+  fs.mkdirSync(pluginDir, { recursive: true });
 
-  rimraf.sync(pluginDir);
-  mkdirp.sync(pluginDir);
   // Write package.json
   fs.writeFileSync(
     path.join(pluginDir, 'package.json'),

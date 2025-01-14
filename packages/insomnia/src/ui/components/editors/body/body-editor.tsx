@@ -1,7 +1,8 @@
 import clone from 'clone';
-import { SvgIcon } from 'insomnia-components';
 import { lookup } from 'mime-types';
-import React, { FC, useCallback } from 'react';
+import React, { type FC, useCallback } from 'react';
+import { Toolbar } from 'react-aria-components';
+import { useParams } from 'react-router-dom';
 
 import {
   CONTENT_TYPE_FILE,
@@ -12,23 +13,18 @@ import {
 } from '../../../../common/constants';
 import { documentationLinks } from '../../../../common/documentation';
 import { getContentTypeHeader } from '../../../../common/misc';
-import * as models from '../../../../models';
-import type {
-  Request,
-  RequestBodyParameter,
-} from '../../../../models/request';
 import {
-  newBodyFile,
-  newBodyForm,
-  newBodyFormUrlEncoded,
-  newBodyRaw,
+  isEventStreamRequest,
+  type Request,
+  type RequestBodyParameter,
 } from '../../../../models/request';
-import type { Settings } from '../../../../models/settings';
-import type { Workspace } from '../../../../models/workspace';
 import { NunjucksEnabledProvider } from '../../../context/nunjucks/nunjucks-enabled-context';
+import { useRequestPatcher } from '../../../hooks/use-request';
+import { ContentTypeDropdown } from '../../dropdowns/content-type-dropdown';
 import { AskModal } from '../../modals/ask-modal';
 import { showModal } from '../../modals/index';
 import { EmptyStatePane } from '../../panes/empty-state-pane';
+import { SvgIcon } from '../../svg-icon';
 import { FileEditor } from './file-editor';
 import { FormEditor } from './form-editor';
 import { GraphQLEditor } from './graph-ql-editor';
@@ -37,42 +33,46 @@ import { UrlEncodedEditor } from './url-encoded-editor';
 
 interface Props {
   request: Request;
-  workspace: Workspace;
-  settings: Settings;
   environmentId: string;
 }
 
 export const BodyEditor: FC<Props> = ({
   request,
-  workspace,
-  settings,
   environmentId,
 }) => {
+  const { workspaceId, requestId } = useParams() as { workspaceId: string; requestId: string };
+  const patchRequest = useRequestPatcher();
   const handleRawChange = useCallback((rawValue: string) => {
-    const oldContentType = request.body.mimeType || '';
-    const body = newBodyRaw(rawValue, oldContentType);
-    models.request.update(request, { body });
-  }, [request]);
+    const body = typeof request.body.mimeType !== 'string'
+      ? { text: rawValue }
+      : { mimeType: request.body.mimeType.split(';')[0], text: rawValue };
+    patchRequest(requestId, { body });
+  }, [patchRequest, request.body.mimeType, requestId]);
 
   const handleGraphQLChange = useCallback((content: string) => {
-    const body = newBodyRaw(content, CONTENT_TYPE_GRAPHQL);
-    models.request.update(request, { body });
-  }, [request]);
+    const body = typeof CONTENT_TYPE_GRAPHQL !== 'string'
+      ? { text: content }
+      : { mimeType: CONTENT_TYPE_GRAPHQL.split(';')[0], text: content };
+    patchRequest(requestId, { body });
+  }, [patchRequest, requestId]);
 
-  const handleFormUrlEncodedChange = useCallback((parameters: RequestBodyParameter[]) => {
-    const body = newBodyFormUrlEncoded(parameters);
-    models.request.update(request, { body });
-  }, [request]);
+  const handleFormUrlEncodedChange = useCallback((params: RequestBodyParameter[]) => {
+    const body = { mimeType: CONTENT_TYPE_FORM_URLENCODED, params };
+    patchRequest(requestId, { body });
+  }, [patchRequest, requestId]);
 
   const handleFormChange = useCallback((parameters: RequestBodyParameter[]) => {
-    const body = newBodyForm(parameters);
-    models.request.update(request, { body });
-  }, [request]);
+    const body = { mimeType: CONTENT_TYPE_FORM_DATA, params: parameters || [] };
+    patchRequest(requestId, { body });
+  }, [patchRequest, requestId]);
 
   const handleFileChange = async (path: string) => {
     const headers = clone(request.headers);
-    const body = newBodyFile(path);
-    const newRequest = await models.request.update(request, { body });
+    const body = {
+      mimeType: CONTENT_TYPE_FILE,
+      fileName: path,
+    };
+    patchRequest(requestId, { body });
     let contentTypeHeader = getContentTypeHeader(headers);
 
     if (!contentTypeHeader) {
@@ -95,9 +95,9 @@ export const BodyEditor: FC<Props> = ({
           Do you want set the <span className="monospace">Content-Type</span> header to{' '}
           <span className="monospace">{newContentType}</span>?
         </p>,
-        onDone: (saidYes: boolean) => {
+        onDone: async (saidYes: boolean) => {
           if (saidYes) {
-            models.request.update(newRequest, { headers });
+            patchRequest(requestId, { headers });
           }
         },
       });
@@ -110,7 +110,7 @@ export const BodyEditor: FC<Props> = ({
   const mimeType = request.body.mimeType;
   const isBodyEmpty = typeof mimeType !== 'string' && !request.body.text;
 
-  const _render = () => {
+  function renderBodyEditor() {
     if (mimeType === CONTENT_TYPE_FORM_URLENCODED) {
       return <UrlEncodedEditor key={uniqueKey} onChange={handleFormUrlEncodedChange} parameters={request.body.params || []} />;
     } else if (mimeType === CONTENT_TYPE_FORM_DATA) {
@@ -118,14 +118,36 @@ export const BodyEditor: FC<Props> = ({
     } else if (mimeType === CONTENT_TYPE_FILE) {
       return <FileEditor key={uniqueKey} onChange={handleFileChange} path={fileName || ''} />;
     } else if (mimeType === CONTENT_TYPE_GRAPHQL) {
-      return <GraphQLEditor key={uniqueKey} uniquenessKey={uniqueKey} request={request} settings={settings} workspaceId={workspace._id} environmentId={environmentId} onChange={handleGraphQLChange} />;
+      return <GraphQLEditor key={uniqueKey} uniquenessKey={uniqueKey} request={request} workspaceId={workspaceId} environmentId={environmentId} onChange={handleGraphQLChange} />;
     } else if (!isBodyEmpty) {
       const contentType = getContentTypeFromHeaders(request.headers) || mimeType;
       return <RawEditor uniquenessKey={uniqueKey} contentType={contentType || 'text/plain'} content={request.body.text || ''} onChange={handleRawChange} />;
+    } else if (isEventStreamRequest(request)) {
+      return (
+        <EmptyStatePane
+          icon={<i className="fa fa-paper-plane" />}
+          documentationLinks={[]}
+          title="Enter a URL and connect to start receiving event stream data"
+        />
+      );
     } else {
-      return <EmptyStatePane icon={<SvgIcon icon="bug" />} documentationLinks={[documentationLinks.introductionToInsomnia]} secondaryAction="Select a body type from above to send data in the body of a request" title="Enter a URL and send to get a response" />;
+      return (
+        <EmptyStatePane
+          icon={<SvgIcon icon="bug" />}
+          documentationLinks={[documentationLinks.introductionToInsomnia]}
+          secondaryAction="Select a body type from above to send data in the body of a request"
+          title="Enter a URL and send to get a response"
+        />
+      );
     }
-  };
+  }
 
-  return <NunjucksEnabledProvider disable={noRender}>{_render()}</NunjucksEnabledProvider>;
+  return (
+    <NunjucksEnabledProvider disable={noRender}>
+      <Toolbar className="w-full flex-shrink-0 h-[--line-height-sm] border-b border-solid border-[--hl-md] flex items-center px-2">
+        <ContentTypeDropdown />
+      </Toolbar>
+      {renderBodyEditor()}
+    </NunjucksEnabledProvider>
+  );
 };

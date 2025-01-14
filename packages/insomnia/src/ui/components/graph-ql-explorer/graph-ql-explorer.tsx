@@ -1,15 +1,14 @@
-import { SchemaReference } from 'codemirror-graphql/utils/SchemaReference';
-import { GraphQLEnumType, GraphQLField, GraphQLNamedType, GraphQLSchema, GraphQLType, isNamedType } from 'graphql';
-import React, { FC, useCallback, useEffect, useRef, useState } from 'react';
+import { type SchemaReference } from 'codemirror-graphql/utils/SchemaReference';
+import { GraphQLEnumType, type GraphQLField, type GraphQLNamedType, GraphQLSchema, type GraphQLType, isNamedType } from 'graphql';
+import React, { type FC, useCallback, useEffect, useRef, useState } from 'react';
 
-import { DebouncedInput } from '../base/debounced-input';
 import { useDocBodyKeyboardShortcuts } from '../keydown-binder';
 import { GraphQLExplorerEnum } from './graph-ql-explorer-enum';
 import { GraphQLExplorerField } from './graph-ql-explorer-field';
 import { GraphQLExplorerSchema } from './graph-ql-explorer-schema';
 import { GraphQLExplorerSearchResults } from './graph-ql-explorer-search-results';
 import { GraphQLExplorerType } from './graph-ql-explorer-type';
-import { ActiveReference, GraphQLFieldWithParentName } from './graph-ql-types';
+import type { ActiveReference, GraphQLFieldWithParentName } from './graph-ql-types';
 
 function getReferenceInfo(reference: SchemaReference) {
   let field: GraphQLField<any, any, { [key: string]: any }> | undefined;
@@ -68,10 +67,9 @@ interface State extends HistoryItem {
   filter: string;
 }
 
-const SEARCH_UPDATE_DELAY_IN_MS = 200;
 export const GraphQLExplorer: FC<Props> = ({ schema, handleClose, visible, reference }) => {
   const [{ currentType, currentField, history, filter }, setState] = useState<State>({ history:[], filter: '' });
-  const inputRef = useRef<DebouncedInput>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const addToHistory = useCallback(({ currentType, currentField, history }: State) => {
     if (!currentType && !currentField) {
@@ -172,19 +170,20 @@ export const GraphQLExplorer: FC<Props> = ({ schema, handleClose, visible, refer
       <>
         <div className="graphql-explorer__search">
           <div className="form-control form-control--outlined form-control--btn-right">
-            <DebouncedInput
+            <input
               ref={inputRef}
-              onChange={filter => setState(state => ({ ...state, filter }))}
+              onChange={event => setState(state => ({ ...state, filter: event.target.value }))}
               placeholder="Search the docs..."
-              delay={SEARCH_UPDATE_DELAY_IN_MS}
-              initialValue={filter}
+              defaultValue={filter}
             />
             {filter && (
               <button
                 className="form-control__right"
                 onClick={() => {
-                  inputRef.current?.setValue('');
-                  setState(state => ({ ...state, filter:'' }));
+                  if (inputRef.current) {
+                    inputRef.current.value = '';
+                    setState(state => ({ ...state, filter:'' }));
+                  }
                 }}
               >
                 <i className="fa fa-times-circle" />

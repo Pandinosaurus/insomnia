@@ -6,13 +6,14 @@ import { CurlFeature } from '@getinsomnia/node-libcurl/dist/enum/CurlFeature';
 import { CurlHttpVersion } from '@getinsomnia/node-libcurl/dist/enum/CurlHttpVersion';
 import { CurlInfoDebug } from '@getinsomnia/node-libcurl/dist/enum/CurlInfoDebug';
 import { CurlNetrc } from '@getinsomnia/node-libcurl/dist/enum/CurlNetrc';
+import { CurlSslOpt } from '@getinsomnia/node-libcurl/dist/enum/CurlSslOpt';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 
 class Curl extends EventEmitter {
-  _options = {};
-  _meta = {};
-  _features = {};
+  _options: { [key: string]: any } = {};
+  _meta: { [key: string]: any } = {};
+  _features: { [key: string]: any } = {};
 
   static info = {
     COOKIELIST: 'COOKIELIST',
@@ -63,17 +64,18 @@ class Curl extends EventEmitter {
     VERBOSE: 'VERBOSE',
     WRITEFUNCTION: 'WRITEFUNCTION',
     XFERINFOFUNCTION: 'XFERINFOFUNCTION',
+    SSL_OPTIONS: 'SSL_OPTIONS',
   };
 
   static getVersion() {
     return 'libcurl/7.54.0 LibreSSL/2.0.20 zlib/1.2.11 nghttp2/1.24.0';
   }
 
-  enable(name) {
+  enable(name: string | number) {
     this._features[name] = true;
   }
 
-  setOpt(name, value) {
+  setOpt(name: string, value: number | ((arg0: Buffer) => any)) {
     if (!name) {
       throw new Error(`Invalid option ${name} ${value}`);
     }
@@ -83,7 +85,7 @@ class Curl extends EventEmitter {
       return;
     }
 
-    if (name === Curl.option.READFUNCTION) {
+    if (name === Curl.option.READFUNCTION && typeof value === 'function') {
       let body = '';
 
       // Only limiting this to prevent infinite loops
@@ -106,7 +108,7 @@ class Curl extends EventEmitter {
       this._options[name] = this._options[name] || [];
 
       this._options[name].push(value);
-    } else if (name === Curl.option.READDATA) {
+    } else if (name === Curl.option.READDATA && typeof value === 'number') {
       const { size } = fs.fstatSync(value);
       const buffer = Buffer.alloc(size);
       fs.readSync(value, buffer, 0, size, 0);
@@ -116,7 +118,7 @@ class Curl extends EventEmitter {
     }
   }
 
-  getInfo(name) {
+  getInfo(name: string) {
     switch (name) {
       case Curl.info.COOKIELIST:
         return [`#HttpOnly_.insomnia.rest\tTRUE\t/url/path\tTRUE\t${Date.now() / 1000}\tfoo\tbar`];
@@ -146,7 +148,6 @@ class Curl extends EventEmitter {
       );
       this.emit('data', data);
 
-      // @ts-expect-error -- TSCONVERSION
       this._options.WRITEFUNCTION(data);
 
       process.nextTick(() => {
@@ -179,7 +180,7 @@ class Curl extends EventEmitter {
  * ```
  * We only want the named members (non-number ones)
  */
-const getTsEnumOnlyWithNamedMembers = enumObj => {
+const getTsEnumOnlyWithNamedMembers = (enumObj: any) => {
   let obj = {};
 
   for (const member in enumObj) {
@@ -192,7 +193,7 @@ const getTsEnumOnlyWithNamedMembers = enumObj => {
 };
 
 // WARNING: changing this to `export default` will break the mock and be incredibly hard to debug. Ask me how I know.
-module.exports = {
+export const nodeLibcurlMock = {
   Curl,
   CurlAuth: getTsEnumOnlyWithNamedMembers(CurlAuth),
   CurlCode: getTsEnumOnlyWithNamedMembers(CurlCode),
@@ -200,4 +201,5 @@ module.exports = {
   CurlFeature: getTsEnumOnlyWithNamedMembers(CurlFeature),
   CurlNetrc: getTsEnumOnlyWithNamedMembers(CurlNetrc),
   CurlHttpVersion: getTsEnumOnlyWithNamedMembers(CurlHttpVersion),
+  CurlSslOpt: getTsEnumOnlyWithNamedMembers(CurlSslOpt),
 };

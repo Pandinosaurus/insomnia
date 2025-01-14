@@ -1,14 +1,7 @@
 import { exportWorkspacesData, exportWorkspacesHAR } from '../../common/export';
-import type { ImportRawConfig } from '../../common/import';
-import { importRaw, importUri } from '../../common/import';
+import { fetchImportContentFromURI, importResourcesToProject, scanResources } from '../../common/import';
 import * as models from '../../models';
-import { DEFAULT_PROJECT_ID } from '../../models/project';
-import type { Workspace, WorkspaceScope } from '../../models/workspace';
-
-interface PluginImportOptions {
-  workspaceId?: string;
-  scope?: WorkspaceScope;
-}
+import type { Workspace } from '../../models/workspace';
 
 interface InsomniaExport {
   workspace?: Workspace;
@@ -17,14 +10,6 @@ interface InsomniaExport {
 }
 
 type HarExport = Omit<InsomniaExport, 'format'>;
-
-const buildImportRawConfig = (options: PluginImportOptions, activeProjectId: string): ImportRawConfig => ({
-  getWorkspaceId: () => Promise.resolve(options.workspaceId || null),
-  getWorkspaceScope: options.scope && (() => (
-    Promise.resolve<WorkspaceScope>(options.scope as WorkspaceScope))
-  ),
-  getProjectId: () => Promise.resolve(activeProjectId),
-});
 
 const getWorkspaces = (activeProjectId?: string) => {
   if (activeProjectId) {
@@ -37,15 +22,34 @@ const getWorkspaces = (activeProjectId?: string) => {
   }
 };
 
-// Only in the case of running unit tests from Inso via send-request can activeProjectId be undefined. This is because the concept of a project doesn't exist in git/insomnia sync or an export file
+// Only in the case of running unit tests from Inso can activeProjectId be undefined. This is because the concept of a project doesn't exist in git/insomnia sync or an export file
 export const init = (activeProjectId?: string) => ({
   data: {
     import: {
-      uri: async (uri: string, options: PluginImportOptions = {}) => {
-        await importUri(uri, buildImportRawConfig(options, activeProjectId || DEFAULT_PROJECT_ID));
+      uri: async (uri: string) => {
+        if (!activeProjectId) {
+          return;
+        }
+
+        const content = await fetchImportContentFromURI({
+          uri,
+        });
+
+        await scanResources([content]);
+
+        await importResourcesToProject({
+          projectId: activeProjectId,
+        });
       },
-      raw: async (text: string, options: PluginImportOptions = {}) => {
-        await importRaw(text, buildImportRawConfig(options, activeProjectId || DEFAULT_PROJECT_ID));
+      raw: async (content: string) => {
+        if (!activeProjectId) {
+          return;
+        }
+        await scanResources([content]);
+
+        await importResourcesToProject({
+          projectId: activeProjectId,
+        });
       },
     },
     export: {

@@ -1,121 +1,73 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import { Button } from 'insomnia-components';
-import React, { PureComponent } from 'react';
-import { connect } from 'react-redux';
+import React, { useEffect, useRef, useState } from 'react';
+import { OverlayContainer } from 'react-aria';
+import { useRouteLoaderData } from 'react-router-dom';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
 import { strings } from '../../../common/strings';
 import { interceptAccessError } from '../../../sync/vcs/util';
 import { VCS } from '../../../sync/vcs/vcs';
-import { RootState } from '../../redux/modules';
-import { selectActiveWorkspace } from '../../redux/selectors';
-import { type ModalHandle, Modal } from '../base/modal';
+import { Button } from '../../components/themed-button';
+import type { WorkspaceLoaderData } from '../../routes/workspace';
+import { Modal, type ModalHandle, type ModalProps } from '../base/modal';
 import { ModalBody } from '../base/modal-body';
 import { ModalHeader } from '../base/modal-header';
-
-type ReduxProps = ReturnType<typeof mapStateToProps>;
-
-interface Props extends ReduxProps {
+type Props = ModalProps & {
   vcs: VCS;
-}
+};
 
 interface State {
-  error: string;
+  error?: string;
   workspaceName: string;
 }
 
-const INITIAL_STATE: State = {
-  error: '',
-  workspaceName: '',
-};
+export const SyncDeleteModal = ({ vcs, onHide }: Props) => {
+  const modalRef = useRef<ModalHandle>(null);
+  const [state, setState] = useState<State>({
+    error: '',
+    workspaceName: '',
+  });
+  const {
+    activeWorkspace,
+  } = useRouteLoaderData(':workspaceId') as WorkspaceLoaderData;
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class UnconnectedSyncDeleteModal extends PureComponent<Props, State> {
-  modal: ModalHandle | null = null;
-  input: HTMLInputElement | null = null;
-
-  constructor(props: Props) {
-    super(props);
-    this.state = INITIAL_STATE;
-  }
-
-  _setModalRef(modal: ModalHandle) {
-    this.modal = modal;
-  }
-
-  _setInputRef(input: HTMLInputElement) {
-    this.input = input;
-  }
-
-  _updateWorkspaceName(event: React.SyntheticEvent<HTMLInputElement>) {
-    this.setState({
-      workspaceName: event.currentTarget.value,
-    });
-  }
-
-  async _handleDelete(event: React.SyntheticEvent<HTMLFormElement>) {
+  useEffect(() => {
+    modalRef.current?.show();
+  }, []);
+  const onSubmit = async (event: React.SyntheticEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const { vcs } = this.props;
-    const { workspaceName } = this.state;
-
     try {
       await interceptAccessError({
         action: 'delete',
-        callback: () => vcs.archiveProject(),
-        resourceName: workspaceName,
+        callback: async () => await vcs.archiveProject(),
+        resourceName: state.workspaceName,
         resourceType: strings.collection.singular.toLowerCase(),
       });
-      this.hide();
+      modalRef.current?.hide();
+      onHide?.();
     } catch (err) {
-      this.setState({
+      setState(state => ({
+        ...state,
         error: err.message,
-      });
+      }));
     }
-  }
+  };
+  const { error, workspaceName } = state;
 
-  async show() {
-    this.modal && this.modal.show();
-    // Reset state
-    this.setState(INITIAL_STATE);
-    // Focus input when modal shows
-    setTimeout(() => {
-      this.input?.focus();
-    }, 100);
-  }
-
-  hide() {
-    this.modal?.hide();
-  }
-
-  render() {
-    const { error, workspaceName } = this.state;
-    const { activeWorkspace } = this.props;
-    const workspaceNameElement = (
-      <strong
-        style={{
-          whiteSpace: 'pre-wrap',
-        }}
-      >
-        {activeWorkspace?.name}
-      </strong>
-    );
-    return (
-      <Modal ref={this._setModalRef} skinny>
+  return (
+    <OverlayContainer>
+      <Modal ref={modalRef} skinny onHide={onHide}>
         <ModalHeader>Delete {strings.collection.singular}</ModalHeader>
         <ModalBody className="wide pad-left pad-right text-center" noScroll>
           {error && <p className="notice error margin-bottom-sm no-margin-top">{error}</p>}
           <p className="selectable">
-            This will permanently delete the {workspaceNameElement}{' '}
+            This will permanently delete the {<strong style={{ whiteSpace: 'pre-wrap' }}>{activeWorkspace?.name}</strong>}{' '}
             {strings.collection.singular.toLowerCase()} remotely.
           </p>
-          <p className="selectable">Please type {workspaceNameElement} to confirm.</p>
-
-          <form onSubmit={this._handleDelete}>
+          <p className="selectable">Please type {<strong style={{ whiteSpace: 'pre-wrap' }}>{activeWorkspace?.name}</strong>} to confirm.</p>
+          <form onSubmit={onSubmit}>
             <div className="form-control form-control--outlined">
               <input
-                ref={this._setInputRef}
                 type="text"
-                onChange={this._updateWorkspaceName}
+                onChange={event => setState(state => ({ ...state, workspaceName: event.target.value }))}
                 value={workspaceName}
               />
               <Button bg="danger" disabled={workspaceName !== activeWorkspace?.name}>
@@ -125,17 +77,6 @@ export class UnconnectedSyncDeleteModal extends PureComponent<Props, State> {
           </form>
         </ModalBody>
       </Modal>
-    );
-  }
-}
-
-const mapStateToProps = (state: RootState) => ({
-  activeWorkspace: selectActiveWorkspace(state),
-});
-
-export const SyncDeleteModal = connect(
-  mapStateToProps,
-  null,
-  null,
-  { forwardRef: true },
-)(UnconnectedSyncDeleteModal);
+    </OverlayContainer>
+  );
+};

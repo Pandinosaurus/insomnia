@@ -1,5 +1,6 @@
 import classnames from 'classnames';
-import React, { forwardRef, ReactNode, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import React, { forwardRef, type ReactNode, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { FocusScope } from 'react-aria';
 
 import { createKeybindingsHandler } from '../keydown-binder';
 // Keep global z-index reference so that every modal will
@@ -11,7 +12,6 @@ export interface ModalProps {
   tall?: boolean;
   wide?: boolean;
   skinny?: boolean;
-  noEscape?: boolean;
   onShow?: Function;
   onHide?: Function;
   children?: ReactNode;
@@ -19,7 +19,7 @@ export interface ModalProps {
 }
 
 export interface ModalHandle {
-  show: (options?: { onHide: () => void }) => void;
+  show: (options?: { onHide?: () => void }) => void;
   hide: () => void;
   toggle: () => void;
   isOpen: () => boolean;
@@ -28,7 +28,6 @@ export const Modal = forwardRef<ModalHandle, ModalProps>(({
   centered,
   children,
   className,
-  noEscape,
   onHide: onHideProp,
   onShow,
   skinny,
@@ -49,8 +48,12 @@ export const Modal = forwardRef<ModalHandle, ModalProps>(({
 
   const hide = useCallback(() => {
     setOpen(false);
-    onHideProp?.();
-    onHideArgument?.();
+    if (typeof onHideProp === 'function') {
+      onHideProp();
+    }
+    if (typeof onHideArgument === 'function') {
+      onHideArgument();
+    }
   }, [onHideProp, onHideArgument]);
 
   useImperativeHandle(ref, () => ({
@@ -65,29 +68,21 @@ export const Modal = forwardRef<ModalHandle, ModalProps>(({
     'theme--dialog',
     className,
     { 'modal--fixed-height': tall },
-    { 'modal--noescape': noEscape },
     { 'modal--wide': wide },
     { 'modal--skinny': skinny },
   );
 
   useEffect(() => {
-    // Don't check for close keys if we don't want them
-    if (noEscape) {
-      return;
-    }
-
     const closeElements = containerRef.current?.querySelectorAll('[data-close-modal]');
 
     for (const element of closeElements || []) {
       element.addEventListener('click', hide);
     }
-  }, [hide, open, noEscape]);
+  }, [hide, open]);
 
   const handleKeydown = createKeybindingsHandler({
     'Escape': () => {
-      if (!noEscape) {
-        hide();
-      }
+      hide();
     },
   });
   useEffect(() => {
@@ -99,21 +94,24 @@ export const Modal = forwardRef<ModalHandle, ModalProps>(({
   }, [handleKeydown]);
 
   return (open ?
-    <div
-      ref={containerRef}
-      onKeyDown={handleKeydown}
-      tabIndex={-1}
-      className={classes}
-      style={{ zIndex }}
-      aria-hidden={false}
-    >
-      <div className="modal__backdrop overlay theme--transparent-overlay" data-close-modal />
-      <div className={classnames('modal__content__wrapper', { 'modal--centered': centered })}>
-        <div className="modal__content">
-          {children}
+    <FocusScope autoFocus>
+      <div
+        ref={containerRef}
+        onKeyDown={handleKeydown}
+        tabIndex={-1}
+        className={classes}
+        style={{ zIndex }}
+        aria-hidden={false}
+        role="dialog"
+      >
+        <div className="modal__backdrop overlay theme--transparent-overlay" data-close-modal />
+        <div className={classnames('modal__content__wrapper', { 'modal--centered': centered })}>
+          <div className="modal__content">
+            {children}
+          </div>
         </div>
       </div>
-    </div>
+    </FocusScope>
     : null
   );
 });

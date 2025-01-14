@@ -1,29 +1,20 @@
-import { Button, Dropdown, DropdownItem, SvgIcon } from 'insomnia-components';
-import React, { FC } from 'react';
-import styled from 'styled-components';
+import React, { type FC } from 'react';
+import { Button } from 'react-aria-components';
 
-import { DASHBOARD_SORT_ORDERS, DashboardSortOrder, dashboardSortOrderName } from '../../../common/constants';
-import { svgPlacementHack } from './dropdown-placement-hacks';
+import { DASHBOARD_SORT_ORDERS, type DashboardSortOrder, dashboardSortOrderName } from '../../../common/constants';
+import { Dropdown, DropdownItem, ItemContent } from '../base/dropdown';
 
 interface DashboardSortDropdownProps {
   value: DashboardSortOrder;
   onSelect: (value: DashboardSortOrder) => void;
 }
 
-const Checkmark = styled(SvgIcon)({
-  '&&': {
-    ...svgPlacementHack,
-    '& svg': {
-      fill: 'var(--color-surprise)',
-    },
-  },
-});
-
 export const DashboardSortDropdown: FC<DashboardSortDropdownProps> = ({ onSelect, value }) => {
   return (
     <Dropdown
+      aria-label='Dashboard Sort Dropdown'
       className="margin-left"
-      renderButton={
+      triggerButton={
         <Button>
           <i className="fa fa-sort" />
         </Button>
@@ -31,12 +22,14 @@ export const DashboardSortDropdown: FC<DashboardSortDropdownProps> = ({ onSelect
     >
       {DASHBOARD_SORT_ORDERS.map(order => (
         <DropdownItem
-          value={order}
-          onClick={onSelect}
           key={order}
-          right={value === order && <Checkmark icon="checkmark" />}
+          aria-label={dashboardSortOrderName[order]}
         >
-          {dashboardSortOrderName[order]}
+          <ItemContent
+            label={dashboardSortOrderName[order]}
+            isSelected={order === value}
+            onClick={() => onSelect(order)}
+          />
         </DropdownItem>
       ))}
     </Dropdown>

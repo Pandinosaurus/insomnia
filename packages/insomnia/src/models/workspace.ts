@@ -1,10 +1,11 @@
-import { Merge } from 'type-fest';
+import type { Merge } from 'type-fest';
 
+import { ACTIVITY_DEBUG, ACTIVITY_SPEC } from '../common/constants';
 import { database as db } from '../common/database';
 import { strings } from '../common/strings';
 import type { BaseModel } from './index';
 import * as models from './index';
-import { DEFAULT_PROJECT_ID, isProjectId } from './project';
+import { isProjectId } from './project';
 
 export const name = 'Workspace';
 export const type = 'Workspace';
@@ -12,22 +13,20 @@ export const prefix = 'wrk';
 export const canDuplicate = true;
 export const canSync = true;
 
-interface GenericWorkspace<Scope extends 'design' | 'collection'> {
+export interface BaseWorkspace {
   name: string;
   description: string;
-  certificates?: any;
-  scope: Scope;
+  certificates?: any; // deprecated
+  scope: 'design' | 'collection' | 'mock-server' | 'environment';
 }
-
-export type DesignWorkspace = GenericWorkspace<'design'>;
-export type CollectionWorkspace = GenericWorkspace<'collection'>;
-export type BaseWorkspace = DesignWorkspace | CollectionWorkspace;
 
 export type WorkspaceScope = BaseWorkspace['scope'];
 
 export const WorkspaceScopeKeys = {
   design: 'design',
   collection: 'collection',
+  mockServer: 'mock-server',
+  environment: 'environment',
 } as const;
 
 export type Workspace = BaseModel & BaseWorkspace;
@@ -36,12 +35,20 @@ export const isWorkspace = (model: Pick<BaseModel, 'type'>): model is Workspace 
   model.type === type
 );
 
-export const isDesign = (workspace: Pick<Workspace, 'scope'>): workspace is DesignWorkspace => (
+export const isDesign = (workspace: Pick<Workspace, 'scope'>) => (
   workspace.scope === WorkspaceScopeKeys.design
 );
 
-export const isCollection = (workspace: Pick<Workspace, 'scope'>): workspace is CollectionWorkspace => (
+export const isCollection = (workspace: Pick<Workspace, 'scope'>) => (
   workspace.scope === WorkspaceScopeKeys.collection
+);
+
+export const isMockServer = (workspace: Pick<Workspace, 'scope'>) => (
+  workspace.scope === WorkspaceScopeKeys.mockServer
+);
+
+export const isEnvironment = (workspace: Pick<Workspace, 'scope'>) => (
+  workspace.scope === WorkspaceScopeKeys.environment
 );
 
 export const init = (): BaseWorkspace => ({
@@ -50,15 +57,16 @@ export const init = (): BaseWorkspace => ({
   scope: WorkspaceScopeKeys.collection,
 });
 
-export async function migrate(doc: Workspace) {
-  doc = await _migrateExtractClientCertificates(doc);
-  doc = await _migrateEnsureName(doc);
-  await models.apiSpec.getOrCreateForParentId(doc._id, {
-    fileName: doc.name,
-  });
-  doc = _migrateScope(doc);
-  doc = _migrateIntoDefaultProject(doc);
-  return doc;
+export function migrate(doc: Workspace) {
+  try {
+    doc = _migrateExtractClientCertificates(doc);
+    doc = _migrateEnsureName(doc);
+    doc = _migrateScope(doc);
+    return doc;
+  } catch (e) {
+    console.log('[db] Error during workspace migration', e);
+    throw e;
+  }
 }
 
 export function getById(id?: string) {
@@ -91,7 +99,7 @@ export function remove(workspace: Workspace) {
   return db.remove(workspace);
 }
 
-async function _migrateExtractClientCertificates(workspace: Workspace) {
+function _migrateExtractClientCertificates(workspace: Workspace) {
   const certificates = workspace.certificates || null;
 
   if (!Array.isArray(certificates)) {
@@ -100,7 +108,7 @@ async function _migrateExtractClientCertificates(workspace: Workspace) {
   }
 
   for (const cert of certificates) {
-    await models.clientCertificate.create({
+    models.clientCertificate.create({
       parentId: workspace._id,
       host: cert.host || '',
       passphrase: cert.passphrase || null,
@@ -114,7 +122,6 @@ async function _migrateExtractClientCertificates(workspace: Workspace) {
   delete workspace.certificates;
   // This will remove the now-missing `certificates` property
   // NOTE: Using db.update so we don't change things like modified time
-  await db.update(workspace);
   return workspace;
 }
 
@@ -123,7 +130,7 @@ async function _migrateExtractClientCertificates(workspace: Workspace) {
  * this happens (and it causes problems) so this migration will ensure that it is
  * corrected.
  */
-async function _migrateEnsureName(workspace: Workspace) {
+function _migrateEnsureName(workspace: Workspace) {
   if (typeof workspace.name !== 'string') {
     workspace.name = 'My Workspace';
   }
@@ -139,37 +146,19 @@ type MigrationWorkspace = Merge<Workspace, { scope: OldScopeTypes | Workspace['s
  * Ensure workspace scope is set to a valid entry
  */
 function _migrateScope(workspace: MigrationWorkspace) {
-  switch (workspace.scope) {
-    case WorkspaceScopeKeys.collection:
-    case WorkspaceScopeKeys.design:
-      break;
-
-    case 'designer':
-    case 'spec':
-      workspace.scope = WorkspaceScopeKeys.design;
-      break;
-
-    case 'debug':
-    case null:
-    default:
-      workspace.scope = WorkspaceScopeKeys.collection;
-      break;
+  if (workspace.scope === WorkspaceScopeKeys.design
+    || workspace.scope === WorkspaceScopeKeys.collection
+    || workspace.scope === WorkspaceScopeKeys.mockServer
+    || workspace.scope === WorkspaceScopeKeys.environment) {
+    return workspace as Workspace;
+  }
+  // designer and spec => design, unset => collection
+  if (workspace.scope === 'designer' || workspace.scope === 'spec') {
+    workspace.scope = WorkspaceScopeKeys.design;
+  } else {
+    workspace.scope = WorkspaceScopeKeys.collection;
   }
   return workspace as Workspace;
-}
-
-function _migrateIntoDefaultProject(workspace: Workspace) {
-  if (!workspace.parentId) {
-    workspace.parentId = DEFAULT_PROJECT_ID;
-  }
-
-  return workspace;
-}
-
-export async function ensureChildren({ _id }: Workspace) {
-  await models.environment.getOrCreateForParentId(_id);
-  await models.cookieJar.getOrCreateForParentId(_id);
-  await models.workspaceMeta.getOrCreateByParentId(_id);
 }
 
 function expectParentToBeProject(parentId?: string | null) {
@@ -177,3 +166,24 @@ function expectParentToBeProject(parentId?: string | null) {
     throw new Error('Expected the parent of a Workspace to be a Project');
   }
 }
+
+export const SCRATCHPAD_WORKSPACE_ID = 'wrk_scratchpad';
+
+export function isScratchpad(workspace?: Workspace) {
+  return workspace?._id === SCRATCHPAD_WORKSPACE_ID;
+}
+
+export const scopeToActivity = (scope: WorkspaceScope) => {
+  switch (scope) {
+    case WorkspaceScopeKeys.collection:
+      return ACTIVITY_DEBUG;
+    case WorkspaceScopeKeys.design:
+      return ACTIVITY_SPEC;
+    case WorkspaceScopeKeys.mockServer:
+      return 'mock-server';
+    case WorkspaceScopeKeys.environment:
+      return 'environment';
+    default:
+      return ACTIVITY_DEBUG;
+  }
+};

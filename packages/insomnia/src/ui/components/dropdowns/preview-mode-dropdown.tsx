@@ -1,17 +1,16 @@
 import fs from 'fs';
-import React, { FC, useCallback } from 'react';
-import { useSelector } from 'react-redux';
+import React, { type FC, useCallback } from 'react';
+import { Button } from 'react-aria-components';
+import { useRouteLoaderData } from 'react-router-dom';
 
-import { getPreviewModeName, PREVIEW_MODES, PreviewMode } from '../../../common/constants';
+import { getPreviewModeName, PREVIEW_MODE_SOURCE, PREVIEW_MODES } from '../../../common/constants';
 import { exportHarCurrentRequest } from '../../../common/har';
 import * as models from '../../../models';
 import { isRequest } from '../../../models/request';
 import { isResponse } from '../../../models/response';
-import { selectActiveRequest, selectActiveResponse, selectResponsePreviewMode } from '../../redux/selectors';
-import { Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownDivider } from '../base/dropdown/dropdown-divider';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
+import { useRequestMetaPatcher } from '../../hooks/use-request';
+import type { RequestLoaderData } from '../../routes/request';
+import { Dropdown, DropdownItem, DropdownSection, ItemContent } from '../base/dropdown';
 
 interface Props {
   download: (pretty: boolean) => any;
@@ -22,33 +21,26 @@ export const PreviewModeDropdown: FC<Props> = ({
   download,
   copyToClipboard,
 }) => {
-  const request = useSelector(selectActiveRequest);
-  const previewMode = useSelector(selectResponsePreviewMode);
-  const response = useSelector(selectActiveResponse);
-
-  const handleClick = async (previewMode: PreviewMode) => {
-    if (!request || !isRequest(request)) {
-      return;
-    }
-    return models.requestMeta.updateOrCreateByParentId(request._id, { previewMode });
-  };
+  const { activeRequest, activeRequestMeta, activeResponse } = useRouteLoaderData('request/:requestId') as RequestLoaderData;
+  const previewMode = activeRequestMeta.previewMode || PREVIEW_MODE_SOURCE;
+  const patchRequestMeta = useRequestMetaPatcher();
   const handleDownloadPrettify = useCallback(() => download(true), [download]);
 
   const handleDownloadNormal = useCallback(() => download(false), [download]);
 
   const exportAsHAR = useCallback(async () => {
-    if (!response || !request || !isRequest(request) || !isResponse(response)) {
+    if (!activeResponse || !activeRequest || !isRequest(activeRequest) || !isResponse(activeResponse)) {
       console.warn('Nothing to download');
       return;
     }
 
-    const data = await exportHarCurrentRequest(request, response);
+    const data = await exportHarCurrentRequest(activeRequest, activeResponse);
     const har = JSON.stringify(data, null, '\t');
 
     const { filePath } = await window.dialog.showSaveDialog({
       title: 'Export As HAR',
       buttonLabel: 'Save',
-      defaultPath: `${request.name.replace(/ +/g, '_')}-${Date.now()}.har`,
+      defaultPath: `${activeRequest.name.replace(/ +/g, '_')}-${Date.now()}.har`,
     });
 
     if (!filePath) {
@@ -59,15 +51,15 @@ export const PreviewModeDropdown: FC<Props> = ({
       console.warn('Failed to export har', err);
     });
     to.end(har);
-  }, [request, response]);
+  }, [activeRequest, activeResponse]);
 
   const exportDebugFile = useCallback(async () => {
-    if (!response || !request || !isResponse(response)) {
+    if (!activeResponse || !activeRequest || !isResponse(activeResponse)) {
       console.warn('Nothing to download');
       return;
     }
 
-    const timeline = models.response.getTimeline(response);
+    const timeline = models.response.getTimeline(activeResponse);
     const headers = timeline
       .filter(v => v.name === 'HeaderIn')
       .map(v => v.value)
@@ -76,15 +68,15 @@ export const PreviewModeDropdown: FC<Props> = ({
     const { canceled, filePath } = await window.dialog.showSaveDialog({
       title: 'Save Full Response',
       buttonLabel: 'Save',
-      defaultPath: `${request.name.replace(/ +/g, '_')}-${Date.now()}.txt`,
+      defaultPath: `${activeRequest.name.replace(/ +/g, '_')}-${Date.now()}.txt`,
     });
 
     if (canceled) {
       return;
     }
-    const readStream = models.response.getBodyStream(response);
+    const readStream = models.response.getBodyStream(activeResponse);
 
-    if (readStream && filePath) {
+    if (readStream && filePath && typeof readStream !== 'string') {
       const to = fs.createWriteStream(filePath);
       to.write(headers);
       readStream.pipe(to);
@@ -92,38 +84,78 @@ export const PreviewModeDropdown: FC<Props> = ({
         console.warn('Failed to save full response', err);
       });
     }
-  }, [request, response]);
-  const shouldPrettifyOption = response.contentType.includes('json');
-  return <Dropdown beside>
-    <DropdownButton className="tall">
-      {getPreviewModeName(previewMode)}
-      <i className="fa fa-caret-down space-left" />
-    </DropdownButton>
-    <DropdownDivider>Preview Mode</DropdownDivider>
-    {PREVIEW_MODES.map(mode => <DropdownItem key={mode} onClick={handleClick} value={mode}>
-      {previewMode === mode ? <i className="fa fa-check" /> : <i className="fa fa-empty" />}
-      {getPreviewModeName(mode, true)}
-    </DropdownItem>)}
-    <DropdownDivider>Actions</DropdownDivider>
-    <DropdownItem onClick={copyToClipboard}>
-      <i className="fa fa-copy" />
-      Copy raw response
-    </DropdownItem>
-    <DropdownItem onClick={handleDownloadNormal}>
-      <i className="fa fa-save" />
-      Export raw response
-    </DropdownItem>
-    {shouldPrettifyOption && <DropdownItem onClick={handleDownloadPrettify}>
-      <i className="fa fa-save" />
-      Export prettified response
-    </DropdownItem>}
-    <DropdownItem onClick={exportDebugFile}>
-      <i className="fa fa-bug" />
-      Export HTTP debug
-    </DropdownItem>
-    <DropdownItem onClick={exportAsHAR}>
-      <i className="fa fa-save" />
-      Export as HAR
-    </DropdownItem>
-  </Dropdown>;
+  }, [activeRequest, activeResponse]);
+  const shouldPrettifyOption = activeResponse?.contentType.includes('json');
+
+  return (
+    <Dropdown
+      aria-label='Preview Mode Dropdown'
+      triggerButton={
+        <Button className="text-[--hl]">
+          {getPreviewModeName(previewMode)}
+          <i className="fa fa-caret-down space-left" />
+        </Button>
+      }
+    >
+      <DropdownSection
+        aria-label='Preview Mode Section'
+        title="Preview Mode"
+      >
+        {PREVIEW_MODES.map(mode =>
+          <DropdownItem
+            key={mode}
+            aria-label={getPreviewModeName(mode, true)}
+          >
+            <ItemContent
+              icon={previewMode === mode ? 'check' : 'empty'}
+              label={getPreviewModeName(mode, true)}
+              onClick={() => patchRequestMeta(activeRequest._id, { previewMode: mode })}
+            />
+          </DropdownItem>
+        )}
+      </DropdownSection>
+      <DropdownSection
+        aria-label='Action Section'
+        title="Action"
+      >
+        <DropdownItem aria-label='Copy raw response'>
+          <ItemContent
+            icon="copy"
+            label="Copy raw response"
+            onClick={copyToClipboard}
+          />
+        </DropdownItem>
+        <DropdownItem aria-label='Export raw response'>
+          <ItemContent
+            icon="save"
+            label="Export raw response"
+            onClick={handleDownloadNormal}
+          />
+        </DropdownItem>
+        <DropdownItem aria-label='Export prettified response'>
+          {shouldPrettifyOption &&
+            <ItemContent
+              icon="save"
+              label="Export prettified response"
+              onClick={handleDownloadPrettify}
+            />
+          }
+        </DropdownItem>
+        <DropdownItem aria-label='Export HTTP debug'>
+          <ItemContent
+            icon="bug"
+            label="Export HTTP debug"
+            onClick={exportDebugFile}
+          />
+        </DropdownItem>
+        <DropdownItem aria-label='Export as HAR'>
+          <ItemContent
+            icon="save"
+            label="Export as HAR"
+            onClick={exportAsHAR}
+          />
+        </DropdownItem>
+      </DropdownSection>
+    </Dropdown>
+  );
 };

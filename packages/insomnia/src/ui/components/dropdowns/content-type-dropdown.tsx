@@ -1,7 +1,8 @@
-import React, { FC, useCallback } from 'react';
-import { useSelector } from 'react-redux';
+import type { IconName } from '@fortawesome/fontawesome-svg-core';
+import React, { type FC } from 'react';
+import { Button, Collection, Header, ListBox, ListBoxItem, Popover, Section, Select, SelectValue } from 'react-aria-components';
+import { useParams, useRouteLoaderData } from 'react-router-dom';
 
-import { SegmentEvent, trackSegmentEvent } from '../../../common/analytics';
 import {
   CONTENT_TYPE_EDN,
   CONTENT_TYPE_FILE,
@@ -14,39 +15,99 @@ import {
   CONTENT_TYPE_XML,
   CONTENT_TYPE_YAML,
   getContentTypeName,
+  METHOD_POST,
 } from '../../../common/constants';
-import { isWebSocketRequest } from '../../../models/websocket-request';
-import { selectActiveRequest } from '../../redux/selectors';
-import { Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownDivider } from '../base/dropdown/dropdown-divider';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
-import { AlertModal } from '../modals/alert-modal';
-import { showModal } from '../modals/index';
-
-interface Props {
-  onChange: (mimeType: string | null) => void;
-}
+import type { Request, RequestBody, RequestHeader, RequestParameter } from '../../../models/request';
+import { deconstructQueryStringToParams } from '../../../utils/url/querystring';
+import { SegmentEvent } from '../../analytics';
+import { useRequestPatcher } from '../../hooks/use-request';
+import type { RequestLoaderData } from '../../routes/request';
+import { Icon } from '../icon';
+import { showAlert } from '../modals/index';
 
 const EMPTY_MIME_TYPE = null;
 
-const MimeTypeItem: FC<{
-  forcedName?: string;
-  mimeType: string | null;
-  onChange: Props['onChange'];
-}> = ({
-  forcedName = '',
-  mimeType,
-  onChange,
-}) => {
-  const request = useSelector(selectActiveRequest);
-  const activeRequest = request && !isWebSocketRequest(request) ? request : null;
+const contentTypeSections: {
+  id: string;
+  icon: IconName;
+  name: string;
+  items: {
+    id: string;
+    name: string;
+  }[];
+}[] = [
+    {
+      id: 'structured',
+      name: 'Structured',
+      icon: 'bars',
+      items: [
+        {
+          id: CONTENT_TYPE_FORM_DATA,
+          name: 'Form Data',
+        },
+        {
+          id: CONTENT_TYPE_FORM_URLENCODED,
+          name: 'Form URL Encoded',
+        },
+        {
+          id: CONTENT_TYPE_GRAPHQL,
+          name: 'GraphQL',
+        },
+      ],
+    },
+    {
+      id: 'text',
+      icon: 'code',
+      name: 'Text',
+      items: [
+        {
+          id: CONTENT_TYPE_JSON,
+          name: 'JSON',
+        },
+        {
+          id: CONTENT_TYPE_XML,
+          name: 'XML',
+        },
+        {
+          id: CONTENT_TYPE_YAML,
+          name: 'YAML',
+        },
+        {
+          id: CONTENT_TYPE_EDN,
+          name: 'EDN',
+        },
+        {
+          id: CONTENT_TYPE_PLAINTEXT,
+          name: 'Plain Text',
+        },
+        {
+          id: CONTENT_TYPE_OTHER,
+          name: 'Other',
+        },
+      ],
+    },
+    {
+      id: 'other',
+      icon: 'ellipsis-h',
+      name: 'Other',
+      items: [
+        {
+          id: CONTENT_TYPE_FILE,
+          name: 'File',
+        },
+        {
+          id: 'no-body',
+          name: 'No Body',
+        },
+      ],
+    },
+  ];
 
-  const handleChangeMimeType = useCallback(async (mimeType: string | null) => {
-    if (!activeRequest) {
-      return;
-    }
-
+export const ContentTypeDropdown: FC = () => {
+  const { activeRequest } = useRouteLoaderData('request/:requestId') as RequestLoaderData;
+  const patchRequest = useRequestPatcher();
+  const { requestId } = useParams() as { requestId: string };
+  const handleChangeMimeType = async (mimeType: string | null) => {
     const { body } = activeRequest;
     const hasMimeType = 'mimeType' in body;
     if (hasMimeType && body.mimeType === mimeType) {
@@ -70,74 +131,145 @@ const MimeTypeItem: FC<{
     const willPreserveForm = isFormUrlEncoded && willBeMultipart;
 
     if (!isEmpty && !willPreserveText && !willPreserveForm) {
-      await showModal(AlertModal, {
+      showAlert({
         title: 'Switch Body Type?',
         message: 'Current body will be lost. Are you sure you want to continue?',
         addCancel: true,
+        onConfirm: async () => {
+          patchRequest(requestId, { body: { mimeType } });
+          window.main.trackSegmentEvent({ event: SegmentEvent.requestBodyTypeSelect, properties: { type: mimeType } });
+        },
       });
+    } else {
+      patchRequest(requestId, { body: { mimeType } });
+      window.main.trackSegmentEvent({ event: SegmentEvent.requestBodyTypeSelect, properties: { type: mimeType } });
     }
+  };
 
-    onChange(mimeType);
-    trackSegmentEvent(SegmentEvent.requestBodyTypeSelect, { type: mimeType });
-  }, [onChange, activeRequest]);
-
-  const contentType = activeRequest?.body && 'mimeType' in activeRequest.body ? activeRequest.body.mimeType : null;
-  const contentTypeFallback = typeof contentType === 'string' ? contentType : EMPTY_MIME_TYPE;
-  const iconClass = mimeType === contentTypeFallback ? 'fa-check' : 'fa-empty';
-  return (
-    <DropdownItem onClick={handleChangeMimeType} value={mimeType}>
-      <i className={`fa ${iconClass}`} />
-      {forcedName || getContentTypeName(mimeType, true)}
-    </DropdownItem>
-  );
-};
-MimeTypeItem.displayName = DropdownItem.name;
-
-export const ContentTypeDropdown: FC<Props> = ({ onChange }) => {
-  const request = useSelector(selectActiveRequest);
-  const activeRequest = request && !isWebSocketRequest(request) ? request : null;
-
-  if (!activeRequest) {
-    return null;
-  }
   const { body } = activeRequest;
   const hasMimeType = 'mimeType' in body;
   const hasParams = body && 'params' in body && body.params;
   const numBodyParams = hasParams ? body.params?.filter(({ disabled }) => !disabled).length : 0;
 
   return (
-    <Dropdown>
-      <DropdownButton className="tall">
-        {hasMimeType ? getContentTypeName(body.mimeType) : 'Body'}
-        {numBodyParams ? <span className="bubble space-left">{numBodyParams}</span> : null}
-        <i className="fa fa-caret-down space-left" />
-      </DropdownButton>
-      <DropdownDivider>
-        <span>
-          <i className="fa fa-bars" /> Structured
-        </span>
-      </DropdownDivider>
-      <MimeTypeItem mimeType={CONTENT_TYPE_FORM_DATA} onChange={onChange} />
-      <MimeTypeItem mimeType={CONTENT_TYPE_FORM_URLENCODED} onChange={onChange} />
-      <MimeTypeItem mimeType={CONTENT_TYPE_GRAPHQL} onChange={onChange} />
-      <DropdownDivider>
-        <span>
-          <i className="fa fa-code" /> Text
-        </span>
-      </DropdownDivider>
-      <MimeTypeItem mimeType={CONTENT_TYPE_JSON} onChange={onChange} />
-      <MimeTypeItem mimeType={CONTENT_TYPE_XML} onChange={onChange} />
-      <MimeTypeItem mimeType={CONTENT_TYPE_YAML} onChange={onChange} />
-      <MimeTypeItem mimeType={CONTENT_TYPE_EDN} onChange={onChange} />
-      <MimeTypeItem mimeType={CONTENT_TYPE_PLAINTEXT} onChange={onChange} />
-      <MimeTypeItem mimeType={CONTENT_TYPE_OTHER} onChange={onChange} />
-      <DropdownDivider>
-        <span>
-          <i className="fa fa-ellipsis-h" /> Other
-        </span>
-      </DropdownDivider>
-      <MimeTypeItem mimeType={CONTENT_TYPE_FILE} onChange={onChange} />
-      <MimeTypeItem mimeType={EMPTY_MIME_TYPE} forcedName="No Body" onChange={onChange} />
-    </Dropdown>
+    <Select
+      aria-label="Change Body Type"
+      name="body-type"
+      onSelectionChange={mimeType => {
+        if (mimeType === 'no-body') {
+          handleChangeMimeType(EMPTY_MIME_TYPE);
+        } else {
+          handleChangeMimeType(mimeType.toString());
+        }
+      }}
+      selectedKey={body.mimeType ?? 'no-body'}
+    >
+      <Button className="px-4 min-w-[12ch] py-1 font-bold flex flex-1 items-center justify-between gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm">
+        <SelectValue className="flex truncate items-center justify-center gap-2">
+          <div className='flex items-center gap-2 text-[--hl]'>
+            {hasMimeType ? getContentTypeName(body.mimeType) : 'No Body'}
+            {numBodyParams ?
+              <span className='p-1 min-w-6 h-6 flex items-center justify-center text-xs rounded-lg border border-solid border-[--hl]'>
+                {numBodyParams}
+              </span>
+              : null}
+          </div>
+        </SelectValue>
+        <Icon icon="caret-down" />
+      </Button>
+      <Popover className="min-w-max overflow-y-hidden flex flex-col">
+        <ListBox
+          items={contentTypeSections}
+          className="border select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] py-2 rounded-md overflow-y-auto focus:outline-none"
+        >
+          {section => (
+            <Section>
+              <Header className='pl-2 py-1 flex items-center gap-2 text-[--hl] text-xs uppercase'>
+                <Icon icon={section.icon} /> <span>{section.name}</span>
+              </Header>
+              <Collection items={section.items}>
+                {item => (
+                  <ListBoxItem
+                    className="flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors"
+                    aria-label={item.name}
+                    textValue={item.name}
+                  >
+                    {({ isSelected }) => (
+                      <>
+                        <span>{item.name}</span>
+                        {isSelected && (
+                          <Icon
+                            icon="check"
+                            className="text-[--color-success] justify-self-end"
+                          />
+                        )}
+                      </>
+                    )}
+                  </ListBoxItem>
+                )}
+              </Collection>
+            </Section>
+          )}
+        </ListBox>
+      </Popover>
+    </Select>
   );
+};
+
+export function newBodyGraphQL(rawBody: string): RequestBody {
+  try {
+    // Only strip the newlines if rawBody is a parsable JSON
+    JSON.parse(rawBody);
+    return {
+      mimeType: CONTENT_TYPE_GRAPHQL,
+      text: rawBody.replace(/\\\\n/g, ''),
+    };
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return {
+        mimeType: CONTENT_TYPE_GRAPHQL,
+        text: rawBody,
+      };
+    } else {
+      throw error;
+    }
+  }
+}
+
+export const updateMimeType = (
+  request: Request,
+  mimeType: string | null,
+): { body: RequestBody; headers: RequestHeader[]; params?: RequestParameter[]; method?: string } => {
+  const withoutContentType = request.headers.filter(h => h?.name?.toLowerCase() !== 'content-type');
+  // 'No body' selected
+  if (typeof mimeType !== 'string') {
+    return {
+      body: {},
+      headers: withoutContentType,
+    };
+  }
+  if (mimeType === CONTENT_TYPE_GRAPHQL) {
+    return {
+      body: newBodyGraphQL(request.body.text || ''),
+      headers: [{ name: 'Content-Type', value: CONTENT_TYPE_JSON }, ...withoutContentType],
+      method: METHOD_POST,
+    };
+  }
+  if (mimeType === CONTENT_TYPE_FORM_URLENCODED || mimeType === CONTENT_TYPE_FORM_DATA) {
+    const params = request.body.params || deconstructQueryStringToParams(request.body.text);
+    return {
+      body: { mimeType, params },
+      headers: [{ name: 'Content-Type', value: mimeType || '' }, ...withoutContentType],
+    };
+  }
+  if (mimeType === CONTENT_TYPE_FILE) {
+    return {
+      body: { mimeType, fileName: '' },
+      headers: [{ name: 'Content-Type', value: mimeType || '' }, ...withoutContentType],
+    };
+  }
+  return {
+    body: { mimeType: mimeType.split(';')[0], text: request.body.text || '' },
+    headers: [{ name: 'Content-Type', value: mimeType || '' }, ...withoutContentType],
+  };
 };

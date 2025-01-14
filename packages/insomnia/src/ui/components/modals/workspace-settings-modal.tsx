@@ -1,563 +1,226 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { FC, PureComponent, ReactNode } from 'react';
-import { connect } from 'react-redux';
-import { Tab, TabList, TabPanel, Tabs } from 'react-tabs';
-import { AnyAction, bindActionCreators, Dispatch } from 'redux';
-import styled from 'styled-components';
+import React from 'react';
+import { Button, Dialog, Heading, Input, Label, Modal, ModalOverlay, Radio, RadioGroup, TextField } from 'react-aria-components';
+import { useFetcher, useRouteLoaderData } from 'react-router-dom';
 
-import { ACTIVITY_HOME, AUTOBIND_CFG } from '../../../common/constants';
 import { database as db } from '../../../common/database';
 import { getWorkspaceLabel } from '../../../common/get-workspace-label';
-import type { ApiSpec } from '../../../models/api-spec';
-import type { ClientCertificate } from '../../../models/client-certificate';
-import * as workspaceOperations from '../../../models/helpers/workspace-operations';
 import * as models from '../../../models/index';
+import type { MockServer } from '../../../models/mock-server';
 import { isRequest } from '../../../models/request';
-import { isWebSocketRequest } from '../../../models/websocket-request';
-import type { Workspace } from '../../../models/workspace';
-import { RootState } from '../../redux/modules';
-import { setActiveActivity } from '../../redux/modules/global';
-import { selectActiveWorkspace, selectActiveWorkspaceClientCertificates, selectActiveWorkspaceName } from '../../redux/selectors';
-import { DebouncedInput } from '../base/debounced-input';
-import { FileInputButton } from '../base/file-input-button';
-import { type ModalHandle, Modal } from '../base/modal';
-import { ModalBody } from '../base/modal-body';
-import { ModalHeader } from '../base/modal-header';
+import { isEnvironment, isMockServer, isScratchpad, type Workspace } from '../../../models/workspace';
+import type { WorkspaceLoaderData } from '../../routes/workspace';
+import { Link } from '../base/link';
 import { PromptButton } from '../base/prompt-button';
-import { HelpTooltip } from '../help-tooltip';
+import { Icon } from '../icon';
 import { MarkdownEditor } from '../markdown-editor';
-import { PasswordViewer } from '../viewers/password-viewer';
-import { showWorkspaceDuplicateModal } from './workspace-duplicate-modal';
+import { showModal } from '.';
+import { AlertModal } from './alert-modal';
+import { useAvailableMockServerType } from './mock-server-settings-modal';
 
-const CertificateFields = styled.div({
-  display: 'flex',
-  flexDirection: 'column',
-  margin: 'var(--padding-sm) 0',
-});
+interface Props {
+  onClose: () => void;
+  workspace: Workspace;
+  mockServer?: MockServer | null;
+}
 
-const CertificateField: FC<{
-  title: string;
-  value: string | null;
-  privateText?: boolean;
-  optional?: boolean;
-}> = ({
-  title,
-  value,
-  privateText,
-  optional,
-}) => {
-  if (optional && value === null) {
-    return null;
-  }
+export const WorkspaceSettingsModal = ({ workspace, mockServer, onClose }: Props) => {
+  // file://./../../routes/workspace.tsx#workspaceLoader
+  const workspaceLoaderData = useRouteLoaderData(':workspaceId') as WorkspaceLoaderData | null;
+  const isLocalProject = !workspaceLoaderData?.activeProject?.remoteId;
+  const {
+    isSelfHostedDisabled,
+    isCloudProjectDisabled,
+    organizationId,
+    projectId,
+    isEnterprise,
+  } = useAvailableMockServerType(isLocalProject);
+  const isScratchpadWorkspace = isScratchpad(workspace);
 
-  let display: ReactNode = value;
-  if (privateText) {
-    display = <PasswordViewer text={value} />;
-  } else {
-    display = <span className="monospace selectable">{value}</span>;
-  }
+  const activeWorkspaceName = workspace.name;
+
+  const workspaceFetcher = useFetcher();
+  const mockServerFetcher = useFetcher();
+  const workspacePatcher = (workspaceId: string, patch: Partial<Workspace>) => {
+    workspaceFetcher.submit({ ...patch, workspaceId }, {
+      action: `/organization/${organizationId}/project/${projectId}/workspace/update`,
+      method: 'post',
+      encType: 'application/json',
+    });
+  };
+  const mockServerPatcher = (mockServerId: string, patch: Partial<MockServer>) => {
+    // file://./../../routes/actions.tsx#updateMockServerAction
+    mockServerFetcher.submit({ ...patch, mockServerId }, {
+      action: `/organization/${organizationId}/project/${projectId}/workspace/${workspace._id}/mock-server/update`,
+      method: 'post',
+      encType: 'application/json',
+    });
+  };
 
   return (
-    <span className="pad-right no-wrap">
-      <strong>{title}:</strong>{' '}{display}
-    </span>
+    <ModalOverlay
+      isOpen
+      isDismissable
+      onOpenChange={isOpen => {
+        !isOpen && onClose();
+      }}
+      className="w-full h-[--visual-viewport-height] fixed z-10 top-0 left-0 flex items-center justify-center bg-black/30"
+    >
+      <Modal
+        onOpenChange={isOpen => {
+          !isOpen && onClose();
+        }}
+        className="flex flex-col w-full max-w-3xl h-max max-h-[calc(100%-var(--padding-xl))] rounded-md border border-solid border-[--hl-sm] p-[--padding-lg] bg-[--color-bg] text-[--color-font]"
+      >
+        <Dialog
+          className="outline-none flex-1 h-full flex flex-col overflow-hidden"
+        >
+          {({ close }) => (
+            <div className='flex-1 flex flex-col gap-4 overflow-hidden h-full'>
+              <div className='flex gap-2 items-center justify-between'>
+                <Heading slot="title" className='text-2xl flex items-center gap-2'>{getWorkspaceLabel(workspace).singular} Settings{' '}</Heading>
+                <Button
+                  className="flex flex-shrink-0 items-center justify-center aspect-square h-6 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                  onPress={close}
+                >
+                  <Icon icon="x" />
+                </Button>
+              </div>
+              <div className='rounded flex-1 w-full overflow-hidden basis-96 flex flex-col gap-2 select-none overflow-y-auto'>
+                <Label className='text-sm text-[--hl]'>
+                  Name
+                </Label>
+                <Input
+                  name='name'
+                  type='text'
+                  required
+                  readOnly={isScratchpadWorkspace}
+                  defaultValue={activeWorkspaceName}
+                  placeholder='Awesome API'
+                  className='p-2 w-full rounded-sm border border-solid border-[--hl-sm] bg-[--color-bg] text-[--color-font] focus:outline-none focus:ring-1 focus:ring-[--hl-md] transition-colors'
+                  onChange={event => workspacePatcher(workspace._id, { name: event.target.value })}
+                />
+                {!isMockServer(workspace) && (
+                  <>
+                    <Label className='text-sm text-[--hl]' aria-label='Description'>
+                      Description
+                    </Label>
+                    <MarkdownEditor
+                      key={workspace._id}
+                      placeholder="Write a description"
+                      defaultValue={workspace.description}
+                      onChange={(description: string) => {
+                        workspacePatcher(workspace._id, { description });
+                      }}
+                    />
+                    {!isEnvironment(workspace) && (
+                      <>
+                        <Heading>Actions</Heading>
+                        <PromptButton
+                          onClick={async () => {
+                            const docs = await db.withDescendants(workspace, models.request.type);
+                            const requests = docs.filter(isRequest);
+                            for (const req of requests) {
+                              await models.response.removeForRequest(req._id);
+                            }
+                            close();
+                          }}
+                          className="width-auto btn btn--clicky inline-block space-left"
+                        >
+                          <i className="fa fa-trash-o" /> Clear All Responses
+                        </PromptButton>
+                      </>
+                    )}
+                  </>
+                )}
+                {Boolean(isMockServer(workspace) && mockServer) && (
+                  <>
+                    <RadioGroup
+                      name="mockServerType"
+                      defaultValue={mockServer?.useInsomniaCloud ? 'cloud' : 'self-hosted'}
+                      onChange={value => {
+                        if (!isEnterprise && value === 'self-hosted') {
+                          showModal(AlertModal, {
+                            title: 'Upgrade required',
+                            message: 'Self-hosted Mocks are only supported for Enterprise users.',
+                          });
+                          return;
+                        }
+                        mockServer && mockServerPatcher(mockServer._id, { useInsomniaCloud: value === 'cloud' });
+                      }}
+                      className="flex flex-col gap-2"
+                    >
+                      <Label className="text-sm text-[--hl]">
+                        Mock server type
+                      </Label>
+                      <div className="flex gap-2">
+                        <Radio
+                          value="cloud"
+                          isDisabled={isCloudProjectDisabled}
+                          className="flex-1 data-[selected]:border-[--color-surprise] data-[selected]:ring-2 data-[selected]:ring-[--color-surprise] data-[disabled]:opacity-25 hover:bg-[--hl-xs] focus:bg-[--hl-sm] border border-solid border-[--hl-md] rounded p-4 focus:outline-none transition-colors"
+                        >
+                          <div className='flex items-center gap-2'>
+                            <Icon icon="globe" />
+                            <Heading className="text-lg font-bold">Cloud Mock</Heading>
+                          </div>
+                          <p className='pt-2'>
+                            Runs on Insomnia cloud, ideal for collaboration.
+                          </p>
+                        </Radio>
+                        <Radio
+                          value="self-hosted"
+                          isDisabled={isSelfHostedDisabled}
+                          className="flex-1 data-[selected]:border-[--color-surprise] data-[selected]:ring-2 data-[selected]:ring-[--color-surprise] data-[disabled]:opacity-25 hover:bg-[--hl-xs] focus:bg-[--hl-sm] border border-solid border-[--hl-md] rounded p-4 focus:outline-none transition-colors"
+                        >
+                          <div className="flex items-center gap-2">
+                            <Icon icon="server" />
+                            <Heading className="text-lg font-bold">Self-hosted Mock</Heading>
+                          </div>
+                          <p className="pt-2">
+                            Runs locally or on your infrastructure, ideal for private usage and lower latency.
+                          </p>
+                        </Radio>
+                      </div>
+                    </RadioGroup>
+                    <div className="flex items-center gap-2 text-sm">
+                      <Icon icon="info-circle" />
+                      <span>
+                        To learn more about self hosting <Link href="https://docs.insomnia.rest/insomnia/api-mocking" className='underline'>click here</Link>
+                      </span>
+                    </div>
+                    {!isSelfHostedDisabled && (
+                      <TextField
+                        autoFocus
+                        name="name"
+                        defaultValue={mockServer?.url || ''}
+                        className={`group relative flex-1 flex flex-col gap-2 ${mockServer?.useInsomniaCloud ? 'disabled' : ''}`}
+                      >
+                        <Label className='text-sm text-[--hl]'>
+                          Self-hosted mock server URL
+                        </Label>
+                        <Input
+                          disabled={mockServer?.useInsomniaCloud}
+                          placeholder={mockServer?.useInsomniaCloud ? '' : 'https://example.com'}
+                          onChange={e => mockServer && mockServerPatcher(mockServer._id, { url: e.target.value })}
+                          className="py-1 placeholder:italic w-full pl-2 pr-7 rounded-sm border border-solid border-[--hl-sm] bg-[--color-bg] text-[--color-font] focus:outline-none focus:ring-1 focus:ring-[--hl-md] transition-colors"
+                        />
+                      </TextField>
+                    )}
+                  </>
+                )}
+              </div>
+              <div className='flex items-center gap-2 justify-end'>
+                <Button
+                  onPress={close}
+                  className="hover:no-underline hover:bg-opacity-90 border border-solid border-[--hl-md] py-2 px-3 text-[--color-font] transition-colors rounded-sm"
+                >
+                  Update
+                </Button>
+              </div>
+            </div>
+          )}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 };
-
-type ReduxProps = ReturnType<typeof mapStateToProps> & ReturnType<typeof mapDispatchToProps>;
-
-interface Props extends ReduxProps {
-  workspace: Workspace;
-  apiSpec: ApiSpec;
-}
-
-interface State {
-  showAddCertificateForm: boolean;
-  host: string;
-  crtPath: string;
-  keyPath: string;
-  pfxPath: string;
-  isPrivate: boolean;
-  passphrase: string;
-  showDescription: boolean;
-  defaultPreviewMode: boolean;
-}
-
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class UnconnectedWorkspaceSettingsModal extends PureComponent<Props, State> {
-  modal: ModalHandle | null = null;
-
-  state: State = {
-    showAddCertificateForm: false,
-    host: '',
-    crtPath: '',
-    keyPath: '',
-    pfxPath: '',
-    passphrase: '',
-    isPrivate: false,
-    showDescription: false,
-    defaultPreviewMode: false,
-  };
-
-  _workspaceUpdate(patch: Record<string, any>) {
-    models.workspace.update(this.props.workspace, patch);
-  }
-
-  _handleAddDescription() {
-    this.setState({
-      showDescription: true,
-    });
-  }
-
-  _handleSetModalRef(modal: ModalHandle) {
-    this.modal = modal;
-  }
-
-  async _handleRemoveWorkspace() {
-    const { activeWorkspace, handleSetActiveActivity } = this.props;
-
-    if (!activeWorkspace) {
-      return;
-    }
-
-    await models.stats.incrementDeletedRequestsForDescendents(activeWorkspace);
-    await models.workspace.remove(activeWorkspace);
-
-    handleSetActiveActivity(ACTIVITY_HOME);
-    this.hide();
-  }
-
-  async _handleClearAllResponses() {
-    const { activeWorkspace } = this.props;
-
-    if (!activeWorkspace) {
-      return;
-    }
-
-    const docs = await db.withDescendants(activeWorkspace, models.request.type);
-    const requests = docs.filter(isRequest);
-
-    for (const req of requests) {
-      await models.response.removeForRequest(req._id);
-    }
-
-    window.main.webSocket.closeAll();
-    const websocketRequests = docs.filter(isWebSocketRequest);
-    for (const req of websocketRequests) {
-      models.webSocketResponse.removeForRequest(req._id);
-    }
-    this.hide();
-  }
-
-  _handleDuplicateWorkspace() {
-    const { workspace, apiSpec } = this.props;
-    showWorkspaceDuplicateModal({ workspace, apiSpec, onDone: this.hide });
-  }
-
-  _handleToggleCertificateForm() {
-    this.setState(state => ({
-      showAddCertificateForm: !state.showAddCertificateForm,
-      crtPath: '',
-      keyPath: '',
-      pfxPath: '',
-      host: '',
-      passphrase: '',
-      isPrivate: false,
-    }));
-  }
-
-  async _handleRename(name: string) {
-    const { workspace, apiSpec } = this.props;
-    await workspaceOperations.rename(workspace, apiSpec, name);
-  }
-
-  _handleDescriptionChange(description: string) {
-    this._workspaceUpdate({
-      description,
-    });
-
-    if (this.state.defaultPreviewMode !== false) {
-      this.setState({
-        defaultPreviewMode: false,
-      });
-    }
-  }
-
-  _handleCreateHostChange(event: React.SyntheticEvent<HTMLInputElement>) {
-    this.setState({
-      host: event.currentTarget.value,
-    });
-  }
-
-  _handleCreatePfxChange(pfxPath: string) {
-    this.setState({
-      pfxPath,
-    });
-  }
-
-  _handleCreateCrtChange(crtPath: string) {
-    this.setState({
-      crtPath,
-    });
-  }
-
-  _handleCreateKeyChange(keyPath: string) {
-    this.setState({
-      keyPath,
-    });
-  }
-
-  _handleCreatePassphraseChange(event: React.SyntheticEvent<HTMLInputElement>) {
-    this.setState({
-      passphrase: event.currentTarget.value,
-    });
-  }
-
-  _handleCreateIsPrivateChange(event: React.SyntheticEvent<HTMLInputElement>) {
-    this.setState({
-      isPrivate: event.currentTarget.checked,
-    });
-  }
-
-  async _handleCreateCertificate(event: React.SyntheticEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const { workspace } = this.props;
-    const { pfxPath, crtPath, keyPath, host, passphrase, isPrivate } = this.state;
-    const certificate = {
-      host,
-      isPrivate,
-      parentId: workspace._id,
-      passphrase: passphrase || null,
-      disabled: false,
-      cert: crtPath || null,
-      key: keyPath || null,
-      pfx: pfxPath || null,
-    };
-    await models.clientCertificate.create(certificate);
-
-    this._handleToggleCertificateForm();
-  }
-
-  static async _handleDeleteCertificate(certificate: ClientCertificate) {
-    await models.clientCertificate.remove(certificate);
-  }
-
-  static async _handleToggleCertificate(certificate: ClientCertificate) {
-    await models.clientCertificate.update(certificate, {
-      disabled: !certificate.disabled,
-    });
-  }
-
-  show() {
-    const hasDescription = !!this.props.workspace.description;
-    this.setState({
-      showDescription: hasDescription,
-      defaultPreviewMode: hasDescription,
-      showAddCertificateForm: false,
-    });
-    this.modal?.show();
-  }
-
-  hide() {
-    this.modal?.hide();
-  }
-
-  renderModalHeader() {
-    const { workspace } = this.props;
-    return (
-      <ModalHeader key={`header::${workspace._id}`}>
-        {getWorkspaceLabel(workspace).singular} Settings{' '}
-        <div className="txt-sm selectable faint monospace">{workspace ? workspace._id : ''}</div>
-      </ModalHeader>
-    );
-  }
-
-  renderCertificate(certificate: ClientCertificate) {
-    return (
-      <div className="row-spaced" key={certificate._id}>
-        <CertificateFields>
-          <CertificateField title="Host" value={certificate.host} />
-          {certificate.pfx ? (
-            <CertificateField title="PFX" value={certificate.pfx} />
-          ) : (
-            <CertificateField title="CRT" value={certificate.cert} />
-          )}
-          <CertificateField title="Key" value={certificate.key} optional />
-          <CertificateField title="Passphrase" value={certificate.passphrase} privateText optional />
-        </CertificateFields>
-
-        <div className="no-wrap">
-          <button
-            className="btn btn--super-compact width-auto"
-            title="Enable or disable certificate"
-            onClick={() => WorkspaceSettingsModal._handleToggleCertificate(certificate)}
-          >
-            {certificate.disabled ? (
-              <i className="fa fa-square-o" />
-            ) : (
-              <i className="fa fa-check-square-o" />
-            )}
-          </button>
-          <PromptButton
-            className="btn btn--super-compact width-auto"
-            confirmMessage=""
-            addIcon
-            onClick={() => WorkspaceSettingsModal._handleDeleteCertificate(certificate)}
-          >
-            <i className="fa fa-trash-o" />
-          </PromptButton>
-        </div>
-      </div>
-    );
-  }
-
-  renderModalBody() {
-    const {
-      clientCertificates,
-      workspace,
-      activeWorkspaceName,
-    } = this.props;
-    const publicCertificates = clientCertificates.filter(c => !c.isPrivate);
-    const privateCertificates = clientCertificates.filter(c => c.isPrivate);
-    const {
-      pfxPath,
-      crtPath,
-      keyPath,
-      isPrivate,
-      showAddCertificateForm,
-      showDescription,
-      defaultPreviewMode,
-    } = this.state;
-    return (
-      <ModalBody key={`body::${workspace._id}`} noScroll>
-        <Tabs forceRenderTabPanel className="react-tabs">
-          <TabList>
-            <Tab tabIndex="-1">
-              <button>Overview</button>
-            </Tab>
-            <Tab tabIndex="-1">
-              <button>Client Certificates</button>
-            </Tab>
-          </TabList>
-          <TabPanel className="react-tabs__tab-panel pad scrollable pad-top-sm">
-            <div className="form-control form-control--outlined">
-              <label>
-                Name
-                <DebouncedInput
-                  // @ts-expect-error -- TSCONVERSION props are spread into an input element
-                  type="text"
-                  delay={500}
-                  placeholder="Awesome API"
-                  defaultValue={activeWorkspaceName}
-                  onChange={this._handleRename}
-                />
-              </label>
-            </div>
-            <div>
-              {showDescription ? (
-                <MarkdownEditor
-                  className="margin-top"
-                  defaultPreviewMode={defaultPreviewMode}
-                  placeholder="Write a description"
-                  defaultValue={workspace.description}
-                  onChange={this._handleDescriptionChange}
-                />
-              ) : (
-                <button
-                  onClick={this._handleAddDescription}
-                  className="btn btn--outlined btn--super-duper-compact"
-                >
-                  Add Description
-                </button>
-              )}
-            </div>
-            <h2>Actions</h2>
-            <div className="form-control form-control--padded">
-              <PromptButton
-                onClick={this._handleRemoveWorkspace}
-                addIcon
-                className="width-auto btn btn--clicky inline-block"
-              >
-                <i className="fa fa-trash-o" /> Delete
-              </PromptButton>
-              <button
-                onClick={this._handleDuplicateWorkspace}
-                className="width-auto btn btn--clicky inline-block space-left"
-              >
-                <i className="fa fa-copy" /> Duplicate
-              </button>
-              <PromptButton
-                onClick={this._handleClearAllResponses}
-                addIcon
-                className="width-auto btn btn--clicky inline-block space-left"
-              >
-                <i className="fa fa-trash-o" /> Clear All Responses
-              </PromptButton>
-            </div>
-          </TabPanel>
-          <TabPanel className="react-tabs__tab-panel pad scrollable">
-            {!showAddCertificateForm ? (
-              <div>
-                {clientCertificates.length === 0 ? (
-                  <p className="notice surprise margin-top-sm">
-                    You have not yet added any certificates
-                  </p>
-                ) : null}
-
-                {publicCertificates.length > 0
-                  ? publicCertificates.map(this.renderCertificate)
-                  : null}
-
-                {privateCertificates.length > 0 ? (
-                  <div>
-                    <h2>
-                      Private Certificates
-                      <HelpTooltip position="right" className="space-left">
-                        Private certificates will not by synced.
-                      </HelpTooltip>
-                    </h2>
-                    {privateCertificates.map(this.renderCertificate)}
-                  </div>
-                ) : null}
-                <hr className="hr--spaced" />
-                <div className="text-center">
-                  <button
-                    className="btn btn--clicky auto"
-                    onClick={this._handleToggleCertificateForm}
-                  >
-                    New Certificate
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={this._handleCreateCertificate}>
-                <div className="form-control form-control--outlined no-pad-top">
-                  <label>
-                    Host
-                    <HelpTooltip position="right" className="space-left">
-                      The host for which this client certificate is valid. Port number is optional
-                      and * can be used as a wildcard.
-                    </HelpTooltip>
-                    <input
-                      type="text"
-                      required
-                      placeholder="my-api.com"
-                      autoFocus
-                      onChange={this._handleCreateHostChange}
-                    />
-                  </label>
-                </div>
-                <div className="form-row">
-                  <div className="form-control width-auto">
-                    <label>
-                      PFX <span className="faint">(or PKCS12)</span>
-                      <FileInputButton
-                        className="btn btn--clicky"
-                        onChange={this._handleCreatePfxChange}
-                        path={pfxPath}
-                        showFileName
-                      />
-                    </label>
-                  </div>
-                  <div className="text-center">
-                    <br />
-                    <br />
-                    &nbsp;&nbsp;Or&nbsp;&nbsp;
-                  </div>
-                  <div className="row-fill">
-                    <div className="form-control">
-                      <label>
-                        CRT File
-                        <FileInputButton
-                          className="btn btn--clicky"
-                          name="Cert"
-                          onChange={this._handleCreateCrtChange}
-                          path={crtPath}
-                          showFileName
-                        />
-                      </label>
-                    </div>
-                    <div className="form-control">
-                      <label>
-                        Key File
-                        <FileInputButton
-                          className="btn btn--clicky"
-                          name="Key"
-                          onChange={this._handleCreateKeyChange}
-                          path={keyPath}
-                          showFileName
-                        />
-                      </label>
-                    </div>
-                  </div>
-                </div>
-                <div className="form-control form-control--outlined">
-                  <label>
-                    Passphrase
-                    <input
-                      type="password"
-                      placeholder="•••••••••••"
-                      onChange={this._handleCreatePassphraseChange}
-                    />
-                  </label>
-                </div>
-                <div className="form-control form-control--slim">
-                  <label>
-                    Private
-                    <HelpTooltip className="space-left">
-                      Private certificates will not be synced
-                    </HelpTooltip>
-                    <input
-                      type="checkbox"
-                      // @ts-expect-error -- TSCONVERSION boolean not valid
-                      value={isPrivate}
-                      onChange={this._handleCreateIsPrivateChange}
-                    />
-                  </label>
-                </div>
-                <br />
-                <div className="pad-top text-right">
-                  <button
-                    type="button"
-                    className="btn btn--super-compact space-right"
-                    onClick={this._handleToggleCertificateForm}
-                  >
-                    Cancel
-                  </button>
-                  <button className="btn btn--clicky space-right" type="submit">
-                    Create Certificate
-                  </button>
-                </div>
-              </form>
-            )}
-          </TabPanel>
-        </Tabs>
-      </ModalBody>
-    );
-  }
-
-  render() {
-    const { workspace } = this.props;
-    return (
-      <Modal ref={this._handleSetModalRef}>
-        {workspace ? this.renderModalHeader() : null}
-        {workspace ? this.renderModalBody() : null}
-      </Modal>
-    );
-  }
-}
-
-const mapStateToProps = (state: RootState) => ({
-  activeWorkspace: selectActiveWorkspace(state),
-  activeWorkspaceName: selectActiveWorkspaceName(state),
-  clientCertificates: selectActiveWorkspaceClientCertificates(state),
-});
-
-const mapDispatchToProps = (dispatch: Dispatch<AnyAction>) => {
-  const bound = bindActionCreators({ setActiveActivity }, dispatch);
-  return {
-    handleSetActiveActivity: bound.setActiveActivity,
-  };
-};
-
-export const WorkspaceSettingsModal = connect(mapStateToProps, mapDispatchToProps, null, { forwardRef: true })(UnconnectedWorkspaceSettingsModal);
+WorkspaceSettingsModal.displayName = 'WorkspaceSettingsModal';

@@ -1,16 +1,24 @@
 import { database as db } from '../common/database';
 import * as models from '../models/index';
+import type { Request } from '../models/request';
+import type { RequestGroup } from '../models/request-group';
+import type { Workspace } from '../models/workspace';
 import * as pluginContexts from '../plugins/context';
-import { PluginTemplateTag } from './extensions';
+import type { PluginTemplateTag } from './extensions';
 import * as templating from './index';
 import { decodeEncoding } from './utils';
 
 const EMPTY_ARG = '__EMPTY_NUNJUCKS_ARG__';
-
+export interface HelperContext {
+  context: any;
+  meta: any;
+  renderPurpose: any;
+  util: any;
+}
 export default class BaseExtension {
   _ext: PluginTemplateTag | null = null;
   _plugin: Plugin | null = null;
-  tags: PluginTemplateTag['name'][] | null = null;
+  tags: PluginTemplateTag['name'][] = [];
 
   constructor(ext: PluginTemplateTag, plugin: Plugin) {
     this._ext = ext;
@@ -30,7 +38,7 @@ export default class BaseExtension {
   }
 
   getName() {
-    return this._ext?.displayName || this.getTag();
+    return typeof this._ext?.displayName === 'string' ? this._ext?.displayName : this.getTag();
   }
 
   getDescription() {
@@ -91,19 +99,17 @@ export default class BaseExtension {
     const renderMeta = renderContext.getMeta ? renderContext.getMeta() : {};
     // Pull out the purpose
     const renderPurpose = renderContext.getPurpose ? renderContext.getPurpose() : null;
-    // Pull out the environment ID
-    const environmentId = renderContext.getEnvironmentId ? renderContext.getEnvironmentId() : 'n/a';
     // Extract the rest of the args
     const args = runArgs
       .slice(0, runArgs.length - 1)
       .filter(a => a !== EMPTY_ARG)
       .map(decodeEncoding);
     // Define a helper context with utils
-    const helperContext = {
+    const helperContext: HelperContext = {
       ...pluginContexts.app.init(renderPurpose),
       // @ts-expect-error -- TSCONVERSION
       ...pluginContexts.store.init(this._plugin),
-      ...pluginContexts.network.init(environmentId),
+      ...pluginContexts.network.init(),
       context: renderContext,
       meta: renderMeta,
       renderPurpose,
@@ -116,7 +122,7 @@ export default class BaseExtension {
           request: {
             getById: models.request.getById,
             getAncestors: async (request: any) => {
-              const ancestors = await db.withAncestors(request, [
+              const ancestors = await db.withAncestors<Request | RequestGroup | Workspace>(request, [
                 models.requestGroup.type,
                 models.workspace.type,
               ]);
@@ -151,6 +157,7 @@ export default class BaseExtension {
       return;
     }
 
+    // FIX THIS: this is throwing unhandled exceptions
     // If the result is a promise, resolve it async
     if (result instanceof Promise) {
       result

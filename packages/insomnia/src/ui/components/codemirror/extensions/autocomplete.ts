@@ -1,10 +1,10 @@
 import 'codemirror/addon/mode/overlay';
 
-import CodeMirror, { EnvironmentAutocompleteOptions, Hint, ShowHintOptions } from 'codemirror';
+import CodeMirror, { type EnvironmentAutocompleteOptions, type Hint, type ShowHintOptions } from 'codemirror';
 
 import { getPlatformKeyCombinations } from '../../../../common/hotkeys';
-import { escapeHTML, escapeRegex, isNotNullOrUndefined } from '../../../../common/misc';
-import { getDefaultFill, NunjucksParsedTag } from '../../../../templating/utils';
+import { escapeRegex, fnOrString, isNotNullOrUndefined } from '../../../../common/misc';
+import { getDefaultFill, type NunjucksParsedTag } from '../../../../templating/utils';
 import { isNunjucksMode } from '../modes/nunjucks';
 
 const NAME_MATCH_FLEXIBLE = /[\w.\][\-/]+$/;
@@ -75,14 +75,11 @@ CodeMirror.defineOption('environmentAutocomplete', null, (cm: CodeMirror.Editor,
       return;
     }
 
-    let hintsContainer = document.querySelector<HTMLElement>('#hints-container');
+    const hintsContainer = document.querySelector<HTMLElement>('#hints-container');
 
     if (!hintsContainer) {
-      const el = document.createElement('div');
-      el.id = 'hints-container';
-      el.className = 'theme--dropdown__menu';
-      document.body.appendChild(el);
-      hintsContainer = el;
+      console.warn('Hints container not found');
+      throw new Error('Hints container not found');
     }
 
     const constants = options.getConstants ? await options.getConstants() : null;
@@ -453,10 +450,10 @@ function getCompletionHints(completionItems: CompletionItem[], segment: string, 
     const name = typeof item === 'string' ? item : item.name;
     const value = typeof item === 'string' ? '' : item.value ?? '';
     const displayName = item.displayName || name;
-    let defaultFill: string | (() => PromiseLike<unknown>) = '';
+    let defaultFill = '';
 
     if (isConstantCompletionItem(item) || isSnippetCompletionItem(item)) {
-      defaultFill = item.value;
+      defaultFill = fnOrString(item.value);
     } else if (isVariableCompletionItem(item)) {
       defaultFill = item.name;
     } else if (isTagCompletionItem(item)) {
@@ -506,6 +503,11 @@ function replaceWithSurround(text: string, find: string, prefix: string, suffix:
   return text.replace(re, matched => prefix + matched + suffix);
 }
 
+function escapeHTML(unsafeText: string) {
+  const div = document.createElement('div');
+  div.innerText = unsafeText;
+  return div.innerHTML;
+}
 /**
  * Render the autocomplete list entry
  */

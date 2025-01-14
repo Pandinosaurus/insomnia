@@ -1,4 +1,4 @@
-import { PREVIEW_MODE_FRIENDLY, PreviewMode } from '../common/constants';
+import { PREVIEW_MODE_FRIENDLY, type PreviewMode } from '../common/constants';
 import { database as db } from '../common/database';
 import type { BaseModel } from './index';
 
@@ -96,10 +96,3 @@ export async function updateOrCreateByParentId(parentId: string, patch: Partial<
 export function all() {
   return db.all<RequestMeta>(type);
 }
-
-// TODO: Ensure the parent of RequestMeta can only be a Request - INS-341
-// function expectParentToBeRequest(parentId: string) {
-//   if (!isRequestId(parentId)) {
-//     throw new Error('Expected the parent of RequestMeta to be a Request');
-//   }
-// }

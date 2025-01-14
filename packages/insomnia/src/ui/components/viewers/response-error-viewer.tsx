@@ -1,19 +1,20 @@
-import React, { FC, memo } from 'react';
-import { useSelector } from 'react-redux';
+import React, { type FC, memo } from 'react';
 
 import { docsBase } from '../../../common/documentation';
-import { selectSettings } from '../../redux/selectors';
+import { useRootLoaderData } from '../../routes/root';
 import { Link } from '../base/link';
 import { showModal } from '../modals/index';
 import { SettingsModal } from '../modals/settings-modal';
-
 interface Props {
   error: string;
   url: string;
 }
 export const ResponseErrorViewer: FC<Props> = memo(({ error }) => {
   let msg: React.ReactNode = null;
-  const { editorFontSize } = useSelector(selectSettings);
+  const {
+    settings,
+  } = useRootLoaderData();
+  const { editorFontSize } = settings;
 
   if (error?.toLowerCase().indexOf('certificate') !== -1) {
     msg = (

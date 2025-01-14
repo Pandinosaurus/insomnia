@@ -1,8 +1,8 @@
 import crypto from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
 
 import { database as db } from '../common/database';
 import type { BaseModel } from './index';
-
 export const name = 'Cookie Jar';
 
 export const type = 'CookieJar';
@@ -49,8 +49,13 @@ export function init() {
 }
 
 export function migrate(doc: CookieJar) {
-  doc = migrateCookieId(doc);
-  return doc;
+  try {
+    doc = migrateCookieId(doc);
+    return doc;
+  } catch (e) {
+    console.log('[db] Error during cookie jar migration', e);
+    throw e;
+  }
 }
 
 export async function create(patch: Partial<CookieJar>) {
@@ -68,7 +73,7 @@ export async function getOrCreateForParentId(parentId: string) {
     return create({
       parentId,
       // Deterministic ID. It helps reduce sync complexity since we won't have to
-      // de-duplicate environments.
+      // de-duplicate cookie jar.
       _id: `${prefix}_${crypto.createHash('sha1').update(parentId).digest('hex')}`,
     });
   } else {
@@ -80,7 +85,7 @@ export async function all() {
   return db.all<BaseModel>(type);
 }
 
-export async function getById(id: string) {
+export async function getById(id: string): Promise<CookieJar | null> {
   return db.get(type, id);
 }
 
@@ -92,7 +97,7 @@ export async function update(cookieJar: CookieJar, patch: Partial<CookieJar> = {
 function migrateCookieId(cookieJar: CookieJar) {
   for (const cookie of cookieJar.cookies) {
     if (!cookie.id) {
-      cookie.id = Math.random().toString().replace('0.', '');
+      cookie.id = uuidv4();
     }
   }
 

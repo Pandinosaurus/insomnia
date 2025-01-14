@@ -1,8 +1,6 @@
-import { HotKeyRegistry, KeyboardShortcut, KeyCombination, PlatformKeyCombinations } from 'insomnia-common';
-import { forEach } from 'ramda';
-
 import { displayModifierKey, isMac } from './constants';
 import { keyboardKeys } from './keyboard-keys';
+import type { HotKeyRegistry, KeyboardShortcut, KeyCombination, PlatformKeyCombinations } from './settings';
 import { strings } from './strings';
 
 /**
@@ -14,9 +12,7 @@ export const keyboardShortcutDescriptions: Record<KeyboardShortcut, string> = {
   'request_showSettings': 'Show Request Settings',
   'preferences_showKeyboardShortcuts': 'Show Keyboard Shortcuts',
   'preferences_showGeneral': 'Show App Preferences',
-  'request_quickSwitch': 'Switch Requests',
-  'request_showRecent': 'Show Recent Requests',
-  'request_showRecentPrevious': 'Show Recent Requests (Previous)',
+  'request_quickSwitch': 'Quick search',
   'plugin_reload': 'Reload Plugins',
   'showAutocomplete': 'Show Autocomplete',
   'request_send': 'Send Request',
@@ -39,7 +35,6 @@ export const keyboardShortcutDescriptions: Record<KeyboardShortcut, string> = {
   'environment_showVariableSourceAndValue': 'Show variable source and value',
   'beautifyRequestBody': 'Beautify Active Code Editors',
   'graphql_explorer_focus_filter': 'Focus GraphQL Explorer Filter',
-  'documents_filter': 'Focus Documents Filter',
 };
 
 /**
@@ -65,14 +60,6 @@ const defaultRegistry: HotKeyRegistry = {
   request_quickSwitch: {
     macKeys: [{ meta: true, keyCode: keyboardKeys.p.keyCode }],
     winLinuxKeys: [{ ctrl: true, keyCode: keyboardKeys.p.keyCode }],
-  },
-  request_showRecent: {
-    macKeys: [{ ctrl: true, keyCode: keyboardKeys.tab.keyCode }],
-    winLinuxKeys: [{ ctrl: true, keyCode: keyboardKeys.tab.keyCode }],
-  },
-  request_showRecentPrevious: {
-    macKeys: [{ ctrl: true, shift: true, keyCode: keyboardKeys.tab.keyCode }],
-    winLinuxKeys: [{ ctrl: true, shift: true, keyCode: keyboardKeys.tab.keyCode }],
   },
   plugin_reload: {
     macKeys: [{ shift: true, meta: true, keyCode: keyboardKeys.r.keyCode }],
@@ -149,8 +136,8 @@ const defaultRegistry: HotKeyRegistry = {
     ],
   },
   request_showDelete: {
-    macKeys: [{ shift: true, meta: true, keyCode: keyboardKeys.delete.keyCode }],
-    winLinuxKeys: [{ ctrl: true, shift: true, keyCode: keyboardKeys.delete.keyCode }],
+    macKeys: [{ shift: true, meta: true, keyCode: keyboardKeys.backspace.keyCode }],
+    winLinuxKeys: [{ ctrl: true, shift: true, keyCode: keyboardKeys.backspace.keyCode }],
   },
   request_showCreateFolder: {
     macKeys: [{ shift: true, meta: true, keyCode: keyboardKeys.n.keyCode }],
@@ -175,10 +162,6 @@ const defaultRegistry: HotKeyRegistry = {
   graphql_explorer_focus_filter: {
     macKeys: [{ shift: true, meta: true, keyCode: keyboardKeys.i.keyCode }],
     winLinuxKeys: [{ ctrl: true, shift: true, keyCode: keyboardKeys.i.keyCode }],
-  },
-  documents_filter: {
-    macKeys: [{ meta: true, keyCode: keyboardKeys.f.keyCode }],
-    winLinuxKeys: [{ ctrl: true, keyCode: keyboardKeys.f.keyCode }],
   },
 };
 
@@ -273,20 +256,20 @@ export function constructKeyCombinationDisplay(
   const chars: string[] = [];
 
   const addModifierKeys = (keys: (keyof Omit<KeyCombination, 'keyCode'>)[]) => {
-    forEach(key => {
+    keys.forEach(key => {
       if (keyComb[key]) {
         chars.push(displayModifierKey(key));
       }
-    }, keys);
+    });
   };
 
   if (isMac()) {
-    // Note: on Mac the cannonical order is Control, Option (i.e. Alt), Shift, Command (i.e. Meta)
+    // Note: on Mac the canonical order is Control, Option (i.e. Alt), Shift, Command (i.e. Meta)
     // see: https://developer.apple.com/design/human-interface-guidelines/macos/user-interaction/keyboard
     addModifierKeys(['ctrl', 'alt', 'shift', 'meta']);
   } else {
     // Note: on Windows the observed oreder (as in, if you just try to make a shortcut with all modifiers) is Windows (i.e. Super/Meta), Ctrl, Alt, Shift.
-    // No such standard really exists, but at least on Ubunut it follows the Windows ordering.
+    // No such standard really exists, but at least on Ubuntu it follows the Windows ordering.
     addModifierKeys(['meta', 'ctrl', 'alt', 'shift']);
   }
 

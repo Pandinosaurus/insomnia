@@ -1,15 +1,12 @@
-import { beforeEach, describe, expect, it } from '@jest/globals';
 import fs from 'fs';
+import { tmpdir } from 'os';
 import path from 'path';
+import { describe, expect, it } from 'vitest';
 
-import { globalBeforeEach } from '../../../__jest__/before-each';
-import { getTempDir } from '../../../common/electron-helpers';
 import * as models from '../../../models/index';
 import * as plugin from '../response';
 
 describe('init()', () => {
-  beforeEach(globalBeforeEach);
-
   it('initializes correctly', async () => {
     const result = plugin.init({});
     expect(Object.keys(result)).toEqual(['response']);
@@ -34,10 +31,8 @@ describe('init()', () => {
 });
 
 describe('response.*', () => {
-  beforeEach(globalBeforeEach);
-
   it('works for basic and full response', async () => {
-    const bodyPath = path.join(getTempDir(), 'response.zip');
+    const bodyPath = path.join(tmpdir(), 'response.zip');
     fs.writeFileSync(bodyPath, Buffer.from('Hello World!'));
     const response = await models.initModel(models.response.type, {
       bodyPath,

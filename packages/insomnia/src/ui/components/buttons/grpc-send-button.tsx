@@ -1,8 +1,7 @@
-import { Button, ButtonProps } from 'insomnia-components';
-import React, { FunctionComponent } from 'react';
+import React, { type FunctionComponent } from 'react';
+import { Button } from 'react-aria-components';
 
-import type { GrpcMethodType } from '../../../network/grpc/method';
-import { GrpcMethodTypeEnum } from '../../../network/grpc/method';
+import type { GrpcMethodType } from '../../../main/ipc/grpc';
 
 interface Props {
   running: boolean;
@@ -11,34 +10,24 @@ interface Props {
   handleCancel: () => void;
 }
 
-const buttonProps: ButtonProps = {
-  className: 'tall',
-  bg: 'surprise',
-  size: 'medium',
-  variant: 'contained',
-  radius: '0',
-};
-
 export const GrpcSendButton: FunctionComponent<Props> = ({ running, methodType, handleStart, handleCancel }) => {
-  if (running) {
-    return (
-      <Button {...buttonProps} onClick={handleCancel}>
-        Cancel
-      </Button>
-    );
-  }
-
   if (!methodType) {
     return (
-      <Button {...buttonProps} disabled>
+      <Button
+        className='px-5 rounded-l-sm'
+        isDisabled
+      >
         Send
       </Button>
     );
   }
 
   return (
-    <Button {...buttonProps} onClick={handleStart}>
-      {methodType === GrpcMethodTypeEnum.unary ? 'Send' : 'Start'}
+    <Button
+      className='px-5 ml-1 text-[--color-font-surprise] bg-[--color-surprise] hover:brightness-75 focus:brightness-75 rounded-l-sm'
+      onPress={running ? handleCancel : handleStart}
+    >
+      {running ? 'Cancel' : methodType === 'unary' ? 'Send' : 'Start'}
     </Button>
   );
 };

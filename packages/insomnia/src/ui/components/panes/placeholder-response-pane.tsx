@@ -1,40 +1,21 @@
-import { KeyboardShortcut } from 'insomnia-common';
-import React, { FC } from 'react';
-import { useSelector } from 'react-redux';
-import styled from 'styled-components';
+import React, { type FC, type PropsWithChildren } from 'react';
 
 import { keyboardShortcutDescriptions } from '../../../common/hotkeys';
-import { selectHotKeyRegistry } from '../../redux/selectors';
+import type { KeyboardShortcut } from '../../../common/settings';
+import { useRootLoaderData } from '../../routes/root';
 import { Hotkey } from '../hotkey';
 import { Pane, PaneBody, PaneHeader } from './pane';
 
-const Wrapper = styled.div({
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'center',
-  justifyContent: 'center',
-  whiteSpace: 'nowrap',
-});
-
-const Item = styled.div({
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-  width: '100%',
-  margin: 'var(--padding-sm)',
-});
-
-const Description = styled.div({
-  marginRight: '2em',
-});
-
-export const PlaceholderResponsePane: FC = ({ children }) => {
-  const hotKeyRegistry = useSelector(selectHotKeyRegistry);
+export const PlaceholderResponsePane: FC<PropsWithChildren<{}>> = ({ children }) => {
+  const {
+    settings,
+  } = useRootLoaderData();
+  const { hotKeyRegistry } = settings;
   return (
     <Pane type="response">
       <PaneHeader />
       <PaneBody placeholder>
-        <Wrapper>
+        <div className="flex flex-col items-center justify-center whitespace-nowrap">
           {[
             'request_send',
             'request_focusUrl',
@@ -42,18 +23,19 @@ export const PlaceholderResponsePane: FC = ({ children }) => {
             'environment_showEditor',
             'preferences_showKeyboardShortcuts',
           ].map(shortcut => (
-            <Item key={shortcut}>
-              <Description>{keyboardShortcutDescriptions[shortcut as KeyboardShortcut]}</Description>
+            <div key={shortcut} className="flex items-center justify-between w-full m-[--padding-sm]">
+              <div className="mr-8">
+                {keyboardShortcutDescriptions[shortcut as KeyboardShortcut]}
+              </div>
               <code>
                 <Hotkey
                   keyBindings={hotKeyRegistry[shortcut as KeyboardShortcut]}
                   useFallbackMessage
                 />
               </code>
-
-            </Item>
+            </div>
           ))}
-        </Wrapper>
+        </div>
       </PaneBody>
       {children}
     </Pane>

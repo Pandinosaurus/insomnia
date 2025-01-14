@@ -1,16 +1,15 @@
-import { PlatformKeyCombinations } from 'insomnia-common';
-import React, { PureComponent } from 'react';
+import React from 'react';
 
+import type { PlatformKeyCombinations } from '../../../../common/settings';
 import { Hotkey } from '../../hotkey';
 
 interface Props {
   keyBindings: PlatformKeyCombinations;
 }
 
-// eslint-disable-next-line react/prefer-stateless-function -- Dropdown's implementation makes changing this to a function component tricky.
-export class DropdownHint extends PureComponent<Props> {
-  render() {
-    const { keyBindings } = this.props;
-    return <Hotkey className="dropdown__hint" keyBindings={keyBindings} />;
-  }
-}
+export const DropdownHint = (props: Props) => {
+  return <Hotkey
+    className='ml-auto text-[--hl-xl] pl-[--padding-lg]'
+    keyBindings={props.keyBindings}
+  />;
+};

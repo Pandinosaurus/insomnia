@@ -1,8 +1,12 @@
-import React, { FC, ReactNode, useCallback } from 'react';
+import React, { type FC, type ReactNode, useCallback } from 'react';
+import { useRouteLoaderData } from 'react-router-dom';
 
 import { toKebabCase } from '../../../../../common/misc';
+import { invariant } from '../../../../../utils/invariant';
 import { useNunjucks } from '../../../../context/nunjucks/use-nunjucks';
-import { useActiveRequest } from '../../../../hooks/use-active-request';
+import { useRequestGroupPatcher, useRequestPatcher } from '../../../../hooks/use-request';
+import type { RequestLoaderData } from '../../../../routes/request';
+import type { RequestGroupLoaderData } from '../../../../routes/request-group';
 import { showModal } from '../../../modals';
 import { CodePromptModal } from '../../../modals/code-prompt-modal';
 import { AuthRow } from './auth-row';
@@ -22,24 +26,33 @@ cJV+wRTs/Szp6LXAgMmTkKMJ+9XXErUIUgwbl27Y3Rv/9ox1p5VRg+A=
 
 interface Props {
   label: string;
-  property: string;
+  property: 'privateKey';
   help?: ReactNode;
 }
 
 export const AuthPrivateKeyRow: FC<Props> = ({ label, property, help }) => {
-  const { activeRequest: { authentication }, patchAuth } = useActiveRequest();
+  const reqData = useRouteLoaderData('request/:requestId') as RequestLoaderData;
+  const groupData = useRouteLoaderData('request-group/:requestGroupId') as RequestGroupLoaderData;
+  const patchRequest = useRequestPatcher();
+  const patchRequestGroup = useRequestGroupPatcher();
+  const patcher = Boolean(reqData) ? patchRequest : patchRequestGroup;
+
+  const { authentication, _id } = reqData?.activeRequest || groupData.activeRequestGroup;
+  invariant('privateKey' in authentication, 'must have privateKey property in authentication object');
+
   const { handleGetRenderContext, handleRender } = useNunjucks();
 
   const privateKey = authentication[property];
-  const onChange = useCallback((value: string) => patchAuth({ [property]: value }), [patchAuth, property]);
+  const onChange = useCallback((value: string) => patcher(_id, { authentication: { ...authentication, [property]: value } }),
+    [_id, authentication, patcher, property]);
 
   const editPrivateKey = () => {
     showModal(CodePromptModal, {
       submitName: 'Done',
       title: 'Edit Private Key',
-      defaultValue: privateKey,
+      defaultValue: privateKey || '',
       onChange,
-      enableRender: handleRender || handleGetRenderContext,
+      enableRender: Boolean(handleRender || handleGetRenderContext),
       placeholder: PRIVATE_KEY_PLACEHOLDER,
       mode: 'text/plain',
       hideMode: true,

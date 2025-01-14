@@ -1,19 +1,11 @@
-import * as electron from 'electron';
 import React from 'react';
 import type ReactDOM from 'react-dom';
 
-import * as analytics from '../../../src/common/analytics';
-import { axiosRequest as axios } from '../../../src/network/axios-request';
 import { getAppPlatform, getAppVersion } from '../../common/constants';
 import type { RenderPurpose } from '../../common/render';
-import {
-  RENDER_PURPOSE_GENERAL,
-  RENDER_PURPOSE_NO_RENDER,
-  RENDER_PURPOSE_SEND,
-} from '../../common/render';
 import { HtmlElementWrapper } from '../../ui/components/html-element-wrapper';
 import { showAlert, showModal, showPrompt } from '../../ui/components/modals';
-import { PromptModalOptions } from '../../ui/components/modals/prompt-modal';
+import type { PromptModalOptions } from '../../ui/components/modals/prompt-modal';
 import { WrapperModal } from '../../ui/components/modals/wrapper-modal';
 
 interface DialogOptions {
@@ -46,9 +38,9 @@ export interface AppContext {
   alert: (
     title: string,
     message?: string
-  ) => Promise<undefined> | ReturnType<typeof showAlert>;
+  ) => ReturnType<typeof showAlert>;
   dialog: (title: string, body: HTMLElement, options?: DialogOptions) => void;
-  prompt: (title: string, options?: Pick<PromptModalOptions, 'label' | 'defaultValue' | 'submitName' | 'cancelable'>) => Promise<string>;
+  prompt: (title: string, options?: Pick<PromptModalOptions, 'label' | 'defaultValue' | 'submitName' | 'inputType'>) => Promise<string>;
   getPath: (name: string) => string;
   getInfo: () => AppInfo;
   showSaveDialog: (options?: ShowDialogOptions) => Promise<string | null>;
@@ -63,22 +55,19 @@ export interface AppContext {
 }
 
 export interface PrivateProperties {
-  axios: typeof axios;
-  analytics: typeof analytics;
   loadRendererModules: () => Promise<{
-    insomniaComponents: any;
     ReactDOM: typeof ReactDOM;
     React: typeof React;
   } | {}>;
 }
 
-export function init(renderPurpose: RenderPurpose = RENDER_PURPOSE_GENERAL): {
+export function init(renderPurpose: RenderPurpose = 'general'): {
   app: AppContext;
   __private: PrivateProperties;
 } {
   const canShowDialogs =
-    renderPurpose === RENDER_PURPOSE_SEND ||
-    renderPurpose === RENDER_PURPOSE_NO_RENDER;
+    renderPurpose === 'send' ||
+    renderPurpose === 'no-render';
   return {
     app: {
       alert(title: string, message?: string) {
@@ -98,8 +87,8 @@ export function init(renderPurpose: RenderPurpose = RENDER_PURPOSE_GENERAL): {
         options = {},
       ) {
         if (
-          renderPurpose !== RENDER_PURPOSE_SEND &&
-          renderPurpose !== RENDER_PURPOSE_NO_RENDER
+          renderPurpose !== 'send' &&
+          renderPurpose !== 'no-render'
         ) {
           return;
         }
@@ -183,15 +172,15 @@ export function init(renderPurpose: RenderPurpose = RENDER_PURPOSE_GENERAL): {
 
       clipboard: {
         readText() {
-          return electron.clipboard.readText();
+          return window.clipboard.readText();
         },
 
         writeText(text) {
-          electron.clipboard.writeText(text);
+          window.clipboard.writeText(text);
         },
 
         clear() {
-          electron.clipboard.clear();
+          window.clipboard.clear();
         },
       },
 
@@ -216,8 +205,6 @@ export function init(renderPurpose: RenderPurpose = RENDER_PURPOSE_GENERAL): {
       },
     },
     __private: {
-      axios,
-      analytics,
       // Provide modules that can be used in the renderer process
       async loadRendererModules() {
         if (typeof globalThis.document === 'undefined') {
@@ -226,12 +213,10 @@ export function init(renderPurpose: RenderPurpose = RENDER_PURPOSE_GENERAL): {
 
         const ReactDOM = await import('react-dom');
         const React = await import('react');
-        const insomniaComponents = await import('insomnia-components');
 
         return {
           ReactDOM,
           React,
-          insomniaComponents,
         };
       },
     },

@@ -1,10 +1,10 @@
 import fs from 'fs';
 
-import { database as db, Query } from '../common/database';
+import { database as db, type Query } from '../common/database';
 import * as requestOperations from './helpers/request-operations';
 import type { BaseModel } from './index';
 import * as models from './index';
-import { ResponseHeader } from './response';
+import type { ResponseHeader } from './response';
 
 export const name = 'WebSocket Response';
 
@@ -60,7 +60,7 @@ export function init(): BaseWebSocketResponse {
   };
 }
 
-export async function migrate(doc: Response) {
+export function migrate(doc: WebSocketResponse) {
   return doc;
 }
 
@@ -82,12 +82,16 @@ export function getById(id: string) {
   return db.get<WebSocketResponse>(type, id);
 }
 
+export function findByParentId(parentId: string) {
+  return db.find<WebSocketResponse>(type, { parentId: parentId });
+}
+
 export async function all() {
   return db.all<WebSocketResponse>(type);
 }
 
 export async function removeForRequest(parentId: string, environmentId?: string | null) {
-  const settings = await models.settings.getOrCreate();
+  const settings = await models.settings.get();
   const query: Record<string, any> = {
     parentId,
   };
@@ -124,7 +128,7 @@ export async function create(patch: Partial<WebSocketResponse> = {}, maxResponse
   };
 
   if (
-    (await models.settings.getOrCreate()).filterResponsesByEnv &&
+    (await models.settings.get()).filterResponsesByEnv &&
     patch.hasOwnProperty('environmentId')
   ) {
     query.environmentId = patch.environmentId;
@@ -149,12 +153,12 @@ async function _findRecentForRequest(
   environmentId: string | null,
   limit: number,
 ) {
-  const query: Query = {
+  const query: Query<WebSocketResponse> = {
     parentId: requestId,
   };
 
   // Filter responses by environment if setting is enabled
-  if ((await models.settings.getOrCreate()).filterResponsesByEnv) {
+  if ((await models.settings.get()).filterResponsesByEnv) {
     query.environmentId = environmentId;
   }
 

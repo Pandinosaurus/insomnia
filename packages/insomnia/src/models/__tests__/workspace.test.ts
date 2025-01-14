@@ -1,16 +1,8 @@
-import { beforeEach, describe, expect, it } from '@jest/globals';
+import { describe, expect, it } from 'vitest';
 
-import { globalBeforeEach } from '../../__jest__/before-each';
-import { database } from '../../common/database';
-import { ApiSpec } from '../api-spec';
-import { CookieJar } from '../cookie-jar';
-import { Environment } from '../environment';
 import * as models from '../index';
 import { WorkspaceScopeKeys } from '../workspace';
-import { WorkspaceMeta } from '../workspace-meta';
-
 describe('migrate()', () => {
-  beforeEach(globalBeforeEach);
 
   it('migrates client certificates properly', async () => {
     const workspace = await models.workspace.create({
@@ -73,18 +65,6 @@ describe('migrate()', () => {
     expect(certsAgain.length).toBe(2);
   });
 
-  it('creates api spec for workspace id', async () => {
-    const workspace = await models.workspace.create({
-      name: 'My Workspace',
-    });
-    await models.apiSpec.removeWhere(workspace._id);
-    expect(await models.apiSpec.getByParentId(workspace._id)).toBe(null);
-    await models.workspace.migrate(workspace);
-    const spec = await models.apiSpec.getByParentId(workspace._id);
-    expect(spec).not.toBe(null);
-    expect(spec?.fileName).toBe(workspace.name);
-  });
-
   it('translates the scope correctly', async () => {
     const specW = await models.workspace.create({
       // @ts-expect-error intentionally incorrect - old scope type
@@ -118,26 +98,5 @@ describe('migrate()', () => {
     expect(somethingElseW.scope).toBe(WorkspaceScopeKeys.collection);
     expect(designW.scope).toBe(WorkspaceScopeKeys.design);
     expect(collectionW.scope).toBe(WorkspaceScopeKeys.collection);
-  });
-});
-
-describe('ensureChildren()', () => {
-  beforeEach(globalBeforeEach);
-
-  it('creates children for workspace', async () => {
-    const workspace = await models.workspace.create();
-    await models.workspace.ensureChildren(workspace);
-
-    const descendents = await database.withDescendants(workspace);
-
-    expect(descendents).toHaveLength(5);
-    expect(descendents).toStrictEqual(expect.arrayContaining([
-      workspace,
-      // ApiSpec is created as part of migration
-      expect.objectContaining<Partial<ApiSpec>>({ parentId: workspace._id, type: models.apiSpec.type }),
-      expect.objectContaining<Partial<Environment>>({ parentId: workspace._id, type: models.environment.type }),
-      expect.objectContaining<Partial<CookieJar>>({ parentId: workspace._id, type: models.cookieJar.type }),
-      expect.objectContaining<Partial<WorkspaceMeta>>({ parentId: workspace._id, type: models.workspaceMeta.type }),
-    ]));
   });
 });

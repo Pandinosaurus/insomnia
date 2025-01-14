@@ -1,31 +1,27 @@
-import { deconstructQueryStringToParams } from 'insomnia-url';
+import { OperationTypeNode } from 'graphql';
 
 import {
+  AUTH_API_KEY,
   AUTH_ASAP,
   AUTH_AWS_IAM,
   AUTH_BASIC,
+  AUTH_BEARER,
   AUTH_DIGEST,
   AUTH_HAWK,
   AUTH_NETRC,
   AUTH_NONE,
   AUTH_NTLM,
   AUTH_OAUTH_1,
-  AUTH_OAUTH_2,
-  CONTENT_TYPE_FILE,
-  CONTENT_TYPE_FORM_DATA,
   CONTENT_TYPE_FORM_URLENCODED,
-  CONTENT_TYPE_GRAPHQL,
-  CONTENT_TYPE_JSON,
-  CONTENT_TYPE_OTHER,
   getContentTypeFromHeaders,
+  HAWK_ALGORITHM_SHA1,
   HAWK_ALGORITHM_SHA256,
   METHOD_GET,
-  METHOD_POST,
 } from '../common/constants';
 import { database as db } from '../common/database';
-import { getContentTypeHeader } from '../common/misc';
-import { SIGNATURE_METHOD_HMAC_SHA1 } from '../network/o-auth-1/constants';
-import { GRANT_TYPE_AUTHORIZATION_CODE } from '../network/o-auth-2/constants';
+import type { OAuth1SignatureMethod } from '../network/o-auth-1/constants';
+import { getOperationType } from '../utils/graph-ql';
+import { deconstructQueryStringToParams } from '../utils/url/querystring';
 import type { BaseModel } from './index';
 
 export const name = 'Request';
@@ -37,8 +33,143 @@ export const prefix = 'req';
 export const canDuplicate = true;
 
 export const canSync = true;
+export type AuthTypes = 'none'
+  | 'apikey'
+  | 'oauth2'
+  | 'oauth1'
+  | 'basic'
+  | 'digest'
+  | 'bearer'
+  | 'ntlm'
+  | 'hawk'
+  | 'iam'
+  | 'netrc'
+  | 'asap';
 
-export type RequestAuthentication = Record<string, any>;
+export interface AuthTypeBasic {
+  type: typeof AUTH_BASIC;
+  useISO88591?: boolean;
+  disabled?: boolean;
+  username?: string;
+  password?: string;
+}
+export interface AuthTypeAPIKey {
+  type: typeof AUTH_API_KEY;
+  disabled?: boolean;
+  key?: string;
+  value?: string;
+  addTo?: string;
+}
+export interface AuthTypeOAuth2 {
+  type: 'oauth2';
+  disabled?: boolean;
+  grantType: 'authorization_code' | 'client_credentials' | 'password' | 'implicit' | 'refresh_token';
+  accessTokenUrl?: string;
+  authorizationUrl?: string;
+  clientId?: string;
+  clientSecret?: string;
+  audience?: string;
+  scope?: string;
+  resource?: string;
+  username?: string;
+  password?: string;
+  redirectUrl?: string;
+  credentialsInBody?: boolean;
+  state?: string;
+  code?: string;
+  accessToken?: string;
+  refreshToken?: string;
+  tokenPrefix?: string;
+  usePkce?: boolean;
+  pkceMethod?: string;
+  responseType?: OAuth2ResponseType;
+  origin?: string;
+}
+export interface AuthTypeHawk {
+  type: typeof AUTH_HAWK;
+  disabled?: boolean;
+  algorithm: typeof HAWK_ALGORITHM_SHA256 | typeof HAWK_ALGORITHM_SHA1;
+  id: string;
+  key: string;
+  ext?: string;
+  validatePayload?: boolean;
+}
+export interface AuthTypeOAuth1 {
+  type: typeof AUTH_OAUTH_1;
+  disabled?: boolean;
+  signatureMethod?: OAuth1SignatureMethod;
+  consumerKey?: string;
+  consumerSecret?: string;
+  tokenKey?: string;
+  tokenSecret?: string;
+  privateKey?: string;
+  version?: string;
+  nonce?: string;
+  timestamp?: string;
+  callback?: string;
+  realm?: string;
+  verifier?: string;
+  includeBodyHash?: boolean;
+}
+export interface AuthTypeDigest {
+  type: typeof AUTH_DIGEST;
+  disabled?: boolean;
+  username?: string;
+  password?: string;
+}
+export interface AuthTypeNTLM {
+  type: typeof AUTH_NTLM;
+  disabled?: boolean;
+  username?: string;
+  password?: string;
+}
+export interface AuthTypeBearer {
+  type: typeof AUTH_BEARER;
+  disabled?: boolean;
+  token?: string;
+  prefix?: string;
+}
+export interface AuthTypeAwsIam {
+  type: typeof AUTH_AWS_IAM;
+  disabled?: boolean;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  sessionToken?: string;
+  region?: string;
+  service?: string;
+}
+export interface AuthTypeNetrc {
+  type: typeof AUTH_NETRC;
+  disabled?: boolean;
+}
+export interface AuthTypeAsap {
+  type: typeof AUTH_ASAP;
+  disabled?: boolean;
+  issuer: string;
+  subject?: string;
+  audience: string;
+  additionalClaims?: string;
+  keyId: string;
+  privateKey: string;
+}
+export interface AuthTypeNone {
+  type: typeof AUTH_NONE;
+  disabled?: boolean;
+}
+export type RequestAuthentication = AuthTypeOAuth2
+  | AuthTypeBasic
+  | AuthTypeBearer
+  | AuthTypeDigest
+  | AuthTypeHawk
+  | AuthTypeOAuth1
+  | AuthTypeAwsIam
+  | AuthTypeNetrc
+  | AuthTypeAsap
+  | AuthTypeNone
+  | AuthTypeAPIKey
+  | AuthTypeNTLM;
+
+export type OAuth2ResponseType = 'code' | 'id_token' | 'id_token token' | 'none' | 'token';
 
 export interface RequestHeader {
   name: string;
@@ -66,6 +197,50 @@ export interface RequestBodyParameter {
   type?: string;
 }
 
+export interface RequestPathParameter {
+  name: string;
+  value: string;
+}
+
+export const PATH_PARAMETER_REGEX = /\/:[^/?#:]+/g;
+
+export const getPathParametersFromUrl = (url: string): string[] => {
+  // Find all path parameters in the URL. Path parameters are defined as segments of the URL that start with a colon.
+  const urlPathParameters = url.match(PATH_PARAMETER_REGEX)?.map(String).map(match => match.replace('\/:', '')) || [];
+  const uniqueUrlPathParameters = [...new Set(urlPathParameters)];
+
+  return uniqueUrlPathParameters;
+};
+
+export const getCombinedPathParametersFromUrl = (url: string, pathParameters: RequestPathParameter[]): RequestPathParameter[] => {
+  // Extract path parameters from the URL
+  const urlPathParameters = getPathParametersFromUrl(url);
+
+  // Initialize an empty array for saved path parameters
+  let savedPathParameters: RequestPathParameter[] = [];
+
+  // Check if there are any path parameters in the active request
+  if (pathParameters) {
+    // Filter out the saved path parameters
+    savedPathParameters = pathParameters.filter(p => urlPathParameters.includes(p.name));
+  }
+
+  // Initialize an empty set for unsaved URL path parameters
+  let unsavedUrlPathParameters = new Set<RequestPathParameter>();
+
+  // Check if there are any path parameters in the URL
+  if (urlPathParameters) {
+    // Filter out the unsaved URL path parameters
+    unsavedUrlPathParameters = new Set(
+      urlPathParameters.filter(p => !savedPathParameters.map(p => p.name).includes(p))
+        .map(p => ({ name: p, value: '' }))
+    );
+  }
+
+  // Combine the saved and unsaved path parameters
+  return [...savedPathParameters, ...unsavedUrlPathParameters];
+};
+
 export interface RequestBody {
   mimeType?: string | null;
   text?: string;
@@ -79,9 +254,12 @@ export interface BaseRequest {
   description: string;
   method: string;
   body: RequestBody;
+  preRequestScript?: string;
+  afterResponseScript?: string;
   parameters: RequestParameter[];
+  pathParameters?: RequestPathParameter[];
   headers: RequestHeader[];
-  authentication: RequestAuthentication;
+  authentication: RequestAuthentication | {};
   metaSortKey: number;
   isPrivate: boolean;
   // Settings
@@ -99,6 +277,17 @@ export const isRequest = (model: Pick<BaseModel, 'type'>): model is Request => (
   model.type === type
 );
 
+export const isRequestId = (id?: string | null) => (
+  id?.startsWith(`${prefix}_`)
+);
+
+export const isEventStreamRequest = (model: Pick<BaseModel, 'type'>) => (
+  isRequest(model) && model.headers?.find(h => h.name === 'Accept')?.value === 'text/event-stream'
+);
+export const isGraphqlSubscriptionRequest = (model: Pick<BaseModel, 'type'>) => (
+  isRequest(model) && getOperationType(model) === OperationTypeNode.SUBSCRIPTION
+);
+
 export function init(): BaseRequest {
   return {
     url: '',
@@ -109,8 +298,11 @@ export function init(): BaseRequest {
     parameters: [],
     headers: [],
     authentication: {},
+    preRequestScript: undefined,
     metaSortKey: -1 * Date.now(),
     isPrivate: false,
+    pathParameters: undefined,
+    afterResponseScript: undefined,
     // Settings
     settingStoreCookies: true,
     settingSendCookies: true,
@@ -121,156 +313,16 @@ export function init(): BaseRequest {
   };
 }
 
-export function newAuth(type: string, oldAuth: RequestAuthentication = {}): RequestAuthentication {
-  switch (type) {
-    // No Auth
-    case AUTH_NONE:
-      return {};
-
-    // HTTP Basic Authentication
-    case AUTH_BASIC:
-      return {
-        type,
-        useISO88591: oldAuth.useISO88591 || false,
-        disabled: oldAuth.disabled || false,
-        username: oldAuth.username || '',
-        password: oldAuth.password || '',
-      };
-
-    case AUTH_DIGEST:
-    case AUTH_NTLM:
-      return {
-        type,
-        disabled: oldAuth.disabled || false,
-        username: oldAuth.username || '',
-        password: oldAuth.password || '',
-      };
-
-    case AUTH_OAUTH_1:
-      return {
-        type,
-        disabled: false,
-        signatureMethod: SIGNATURE_METHOD_HMAC_SHA1,
-        consumerKey: '',
-        consumerSecret: '',
-        tokenKey: '',
-        tokenSecret: '',
-        privateKey: '',
-        version: '1.0',
-        nonce: '',
-        timestamp: '',
-        callback: '',
-      };
-
-    // OAuth 2.0
-    case AUTH_OAUTH_2:
-      return {
-        type,
-        grantType: GRANT_TYPE_AUTHORIZATION_CODE,
-      };
-
-    // Aws IAM
-    case AUTH_AWS_IAM:
-      return {
-        type,
-        disabled: oldAuth.disabled || false,
-        accessKeyId: oldAuth.accessKeyId || '',
-        secretAccessKey: oldAuth.secretAccessKey || '',
-        sessionToken: oldAuth.sessionToken || '',
-      };
-
-    // Hawk
-    case AUTH_HAWK:
-      return {
-        type,
-        algorithm: HAWK_ALGORITHM_SHA256,
-      };
-
-    // Atlassian ASAP
-    case AUTH_ASAP:
-      return {
-        type,
-        issuer: '',
-        subject: '',
-        audience: '',
-        additionalClaims: '',
-        keyId: '',
-        privateKey: '',
-      };
-
-    // Types needing no defaults
-    case AUTH_NETRC:
-    default:
-      return {
-        type,
-      };
-  }
-}
-
-export function newBodyNone(): RequestBody {
-  return {};
-}
-
-export function newBodyRaw(rawBody: string, contentType?: string): RequestBody {
-  if (typeof contentType !== 'string') {
-    return {
-      text: rawBody,
-    };
-  }
-
-  const mimeType = contentType.split(';')[0];
-  return {
-    mimeType,
-    text: rawBody,
-  };
-}
-
-export function newBodyGraphQL(rawBody: string): RequestBody {
-  try {
-    // Only strip the newlines if rawBody is a parsable JSON
-    JSON.parse(rawBody);
-    return {
-      mimeType: CONTENT_TYPE_GRAPHQL,
-      text: rawBody.replace(/\\\\n/g, ''),
-    };
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      return {
-        mimeType: CONTENT_TYPE_GRAPHQL,
-        text: rawBody,
-      };
-    } else {
-      throw error;
-    }
-  }
-}
-
-export function newBodyFormUrlEncoded(parameters: RequestBodyParameter[] | null): RequestBody {
-  return {
-    mimeType: CONTENT_TYPE_FORM_URLENCODED,
-    params: parameters || [],
-  };
-}
-
-export function newBodyFile(path: string): RequestBody {
-  return {
-    mimeType: CONTENT_TYPE_FILE,
-    fileName: path,
-  };
-}
-
-export function newBodyForm(parameters: RequestBodyParameter[]): RequestBody {
-  return {
-    mimeType: CONTENT_TYPE_FORM_DATA,
-    params: parameters || [],
-  };
-}
-
 export function migrate(doc: Request): Request {
-  doc = migrateBody(doc);
-  doc = migrateWeirdUrls(doc);
-  doc = migrateAuthType(doc);
-  return doc;
+  try {
+    doc = migrateBody(doc);
+    doc = migrateWeirdUrls(doc);
+    doc = migrateAuthType(doc);
+    return doc;
+  } catch (e) {
+    console.log('[db] Error during request migration', e);
+    throw e;
+  }
 }
 
 export function create(patch: Partial<Request> = {}) {
@@ -285,111 +337,16 @@ export function getById(id: string): Promise<Request | null> {
   return db.get(type, id);
 }
 
+export function getByParentId(parentId: string) {
+  return db.getWhere<Request>(type, { parentId: parentId });
+}
+
 export function findByParentId(parentId: string) {
   return db.find<Request>(type, { parentId: parentId });
 }
 
 export function update(request: Request, patch: Partial<Request>) {
   return db.docUpdate<Request>(request, patch);
-}
-
-export function updateMimeType(
-  request: Request,
-  mimeType: string,
-  doCreate = false,
-  savedBody: RequestBody = {},
-) {
-  let headers = request.headers ? [...request.headers] : [];
-  const contentTypeHeader = getContentTypeHeader(headers);
-  // GraphQL uses JSON content-type
-  const contentTypeHeaderValue = mimeType === CONTENT_TYPE_GRAPHQL ? CONTENT_TYPE_JSON : mimeType;
-
-  // GraphQL must be POST
-  if (mimeType === CONTENT_TYPE_GRAPHQL) {
-    request.method = METHOD_POST;
-  }
-
-  // Check if we are converting to/from variants of XML or JSON
-  let leaveContentTypeAlone = false;
-
-  if (contentTypeHeader && mimeType) {
-    const current = contentTypeHeader.value;
-
-    if (current.includes('xml') && mimeType.includes('xml')) {
-      leaveContentTypeAlone = true;
-    } else if (current.includes('json') && mimeType.includes('json')) {
-      leaveContentTypeAlone = true;
-    }
-  }
-
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  // 1. Update Content-Type header //
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  const hasBody = typeof mimeType === 'string';
-
-  if (!hasBody) {
-    headers = headers.filter(h => h !== contentTypeHeader);
-  } else if (mimeType === CONTENT_TYPE_OTHER) {
-    // Leave headers alone
-  } else if (mimeType && contentTypeHeader && !leaveContentTypeAlone) {
-    contentTypeHeader.value = contentTypeHeaderValue;
-  } else if (mimeType && !contentTypeHeader) {
-    headers.push({
-      name: 'Content-Type',
-      value: contentTypeHeaderValue,
-    });
-  }
-
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  // 2. Make a new request body //
-  // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-  let body;
-  const oldBody = Object.keys(savedBody).length === 0 ? request.body : savedBody;
-
-  if (mimeType === CONTENT_TYPE_FORM_URLENCODED) {
-    // Urlencoded
-    body = oldBody.params
-      ? newBodyFormUrlEncoded(oldBody.params)
-      // @ts-expect-error -- TSCONVERSION
-      : newBodyFormUrlEncoded(deconstructQueryStringToParams(oldBody.text));
-  } else if (mimeType === CONTENT_TYPE_FORM_DATA) {
-    // Form Data
-    body = oldBody.params
-      ? newBodyForm(oldBody.params)
-      // @ts-expect-error -- TSCONVERSION
-      : newBodyForm(deconstructQueryStringToParams(oldBody.text));
-  } else if (mimeType === CONTENT_TYPE_FILE) {
-    // File
-    body = newBodyFile('');
-  } else if (mimeType === CONTENT_TYPE_GRAPHQL) {
-    if (contentTypeHeader) {
-      contentTypeHeader.value = CONTENT_TYPE_JSON;
-    }
-
-    body = newBodyGraphQL(oldBody.text || '');
-  } else if (typeof mimeType !== 'string') {
-    // No body
-    body = newBodyNone();
-  } else {
-    // Raw Content-Type (ex: application/json)
-    body = newBodyRaw(oldBody.text || '', mimeType);
-  }
-
-  // ~~~~~~~~~~~~~~~~~~~~~~~~ //
-  // 2. create/update request //
-  // ~~~~~~~~~~~~~~~~~~~~~~~~ //
-  if (doCreate) {
-    const newRequest: Request = Object.assign({}, request, {
-      headers,
-      body,
-    });
-    return create(newRequest);
-  } else {
-    return update(request, {
-      headers,
-      body,
-    });
-  }
 }
 
 export async function duplicate(request: Request, patch: Partial<Request> = {}) {
@@ -408,7 +365,6 @@ export async function duplicate(request: Request, patch: Partial<Request> = {}) 
     },
   };
 
-  // @ts-expect-error -- TSCONVERSION appears to be a genuine error
   const [nextRequest] = await db.find<Request>(type, q, {
     metaSortKey: 1,
   });
@@ -451,13 +407,20 @@ function migrateBody(request: Request) {
 
   if (wasFormUrlEncoded) {
     // Convert old-style form-encoded request bodies to new style
-    const body = typeof request.body === 'string' ? request.body : '';
-    request.body = newBodyFormUrlEncoded(deconstructQueryStringToParams(body, false));
+    request.body = {
+      mimeType: CONTENT_TYPE_FORM_URLENCODED,
+      params: deconstructQueryStringToParams(typeof request.body === 'string' ? request.body : '', false),
+    };
   } else if (!request.body && !contentType) {
     request.body = {};
   } else {
-    const body: string = typeof request.body === 'string' ? request.body : '';
-    request.body = newBodyRaw(body, contentType);
+    const rawBody: string = typeof request.body === 'string' ? request.body : '';
+    request.body = typeof contentType !== 'string' ? {
+      text: rawBody,
+    } : {
+      mimeType: contentType.split(';')[0],
+      text: rawBody,
+    };
   }
 
   return request;
@@ -482,9 +445,10 @@ function migrateWeirdUrls(request: Request) {
  * @param request
  */
 function migrateAuthType(request: Request) {
-  const isAuthSet = request.authentication && request.authentication.username;
-
+  const isAuthSet = request?.authentication && 'username' in request.authentication && request.authentication.username;
+  // @ts-expect-error -- old model
   if (isAuthSet && !request.authentication.type) {
+    // @ts-expect-error -- old model
     request.authentication.type = AUTH_BASIC;
   }
 

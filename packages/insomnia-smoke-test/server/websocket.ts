@@ -30,6 +30,16 @@ const handleConnection = (ws: WebSocket, req: IncomingMessage) => {
       ws.send(message);
       return;
     }
+
+    // Returns binary data
+    if (req.url === '/binary') {
+      ws.send(Buffer.alloc(0));
+      ws.send(Buffer.from('test'));
+      ws.send(message);
+      ws.send(message.toString());
+      return;
+    }
+
     if (message.toString() === 'close') {
       ws.close(1003, 'Invalid message type');
     }
@@ -41,10 +51,7 @@ const handleConnection = (ws: WebSocket, req: IncomingMessage) => {
   });
 };
 const redirectOnSuccess = (socket: Socket) => {
-  socket.end(`HTTP/1.1 302 Found
-Location: ws://localhost:4010
-
-`);
+  socket.end('HTTP/1.1 302 Found\r\nLocation: ws://localhost:4010/\r\n\r\n');
   return;
 };
 const return401withBody = (socket: Socket) => {
@@ -70,6 +77,13 @@ const upgrade = (wss: WebSocketServer, request: IncomingMessage, socket: Socket,
       return;
     }
     return redirectOnSuccess(socket);
+  }
+  if (request.url === '/delay') {
+    const delaySec = Number.parseInt(request.headers.duration as string || '5');
+    setTimeout(function() {
+      redirectOnSuccess(socket);
+    }, delaySec * 1000);
+    return ;
   }
   if (request.url === '/basic-auth') {
     // login with user:password

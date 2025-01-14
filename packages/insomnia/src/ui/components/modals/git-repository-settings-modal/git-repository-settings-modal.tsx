@@ -1,197 +1,183 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { PureComponent, useState } from 'react';
-import { Tab, TabList, TabPanel, Tabs } from 'react-tabs';
+import React, { useEffect, useRef, useState } from 'react';
+import { OverlayContainer } from 'react-aria';
+import { Tab, TabList, TabPanel, Tabs } from 'react-aria-components';
+import { useFetcher, useParams } from 'react-router-dom';
 
-import { AUTOBIND_CFG } from '../../../../common/constants';
 import { docsGitSync } from '../../../../common/documentation';
 import type { GitRepository, OauthProviderName } from '../../../../models/git-repository';
-import { deleteGitRepository } from '../../../../models/helpers/git-repository-operations';
 import { Link } from '../../base/link';
-import { type ModalHandle, Modal } from '../../base/modal';
+import { Modal, type ModalHandle, type ModalProps } from '../../base/modal';
 import { ModalBody } from '../../base/modal-body';
 import { ModalFooter } from '../../base/modal-footer';
 import { ModalHeader } from '../../base/modal-header';
 import { ErrorBoundary } from '../../error-boundary';
 import { HelpTooltip } from '../../help-tooltip';
+import { showAlert } from '..';
 import { CustomRepositorySettingsFormGroup } from './custom-repository-settings-form-group';
 import { GitHubRepositorySetupFormGroup } from './github-repository-settings-form-group';
 import { GitLabRepositorySetupFormGroup } from './gitlab-repository-settings-form-group';
 
-interface State {
-  gitRepository: GitRepository | null;
-}
+export const GitRepositorySettingsModal = (props: ModalProps & {
+  gitRepository?: GitRepository;
+}) => {
+  const { organizationId, projectId, workspaceId } = useParams() as { organizationId: string; projectId: string; workspaceId: string };
+  const { gitRepository } = props;
+  const modalRef = useRef<ModalHandle>(null);
+  const updateGitRepositoryFetcher = useFetcher();
+  const deleteGitRepositoryFetcher = useFetcher();
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class GitRepositorySettingsModal extends PureComponent<{}, State> {
-  modal: ModalHandle | null = null;
-  _onSubmitEdits?: ((repo: Partial<GitRepository>) => any) | null;
+  const [selectedTab, setTab] = useState<OauthProviderName>('github');
 
-  state: State = {
-    gitRepository: null,
+  useEffect(() => {
+    modalRef.current?.show();
+  }, []);
+
+  const onSubmit = (gitRepositoryPatch: Partial<GitRepository>) => {
+    const {
+      author,
+      credentials,
+      created,
+      modified,
+      isPrivate,
+      needsFullClone,
+      uriNeedsMigration,
+      ...repoPatch
+    } = gitRepositoryPatch;
+
+    updateGitRepositoryFetcher.submit(
+      {
+        ...repoPatch,
+        authorName: author?.name || '',
+        authorEmail: author?.email || '',
+        ...credentials,
+      },
+      {
+        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/update`,
+        method: 'post',
+      }
+    );
   };
 
-  _setModalRef(modal: ModalHandle) {
-    this.modal = modal;
-  }
+  const isLoading = updateGitRepositoryFetcher.state !== 'idle';
+  const hasGitRepository = Boolean(gitRepository);
+  const errors = updateGitRepositoryFetcher.data?.errors as (Error | string)[];
 
-  show(options: {
-    gitRepository: GitRepository | null;
-    onSubmitEdits: (repo: Partial<GitRepository>) => any;
-  }) {
-    this._onSubmitEdits = options.onSubmitEdits;
-    const { gitRepository } = options;
+  useEffect(() => {
+    if (errors && errors.length) {
+      const errorMessage = errors.map(e => e instanceof Error ? e.message : typeof e === 'string' && e).join(', ');
 
-    this.setState({ gitRepository });
-    this.modal?.show();
-  }
+      showAlert({
+        title: 'Error Cloning Repository',
+        message: errorMessage,
+      });
+    }
+  }, [errors]);
 
-  hide() {
-    this.modal?.hide();
-  }
-
-  render() {
-    const _handleReset = async () => {
-      const { gitRepository } = this.state;
-
-      if (!gitRepository) {
-        // Nothing to do
-        return;
-      }
-
-      await deleteGitRepository(gitRepository);
-      this.hide();
-    };
-
-    const _handleSubmitEdit = async (patch: Partial<GitRepository>) => {
-      if (this._onSubmitEdits) {
-        this._onSubmitEdits({ ...this.state.gitRepository, ...patch });
-      }
-
-      this.hide();
-    };
-
-    return (
-      <Modal ref={this._setModalRef} {...this.props}>
-        <ModalForm
-          onSubmit={patch => _handleSubmitEdit(patch)}
-          onReset={_handleReset}
-          gitRepository={this.state.gitRepository}
-        />
-      </Modal>
-    );
-  }
-}
-
-interface Props {
-  gitRepository: GitRepository | null;
-  onSubmit: (patch: Partial<GitRepository>) => void;
-  onReset: () => void;
-}
-
-const oauth2Formats: OauthProviderName[] = ['github', 'gitlab', 'custom'];
-
-const ModalForm = (props: Props) => {
-  const { gitRepository, onSubmit, onReset } = props;
-
-  const oauth2format =
-    (gitRepository &&
-      gitRepository.credentials &&
-      'oauth2format' in gitRepository.credentials &&
-      gitRepository.credentials.oauth2format) ||
-    'custom';
-
-  const initialTab = !gitRepository ? 'github' : oauth2format;
-
-  const [selectedTab, setTab] = useState<OauthProviderName>(initialTab);
-
-  const selectedTabIndex = oauth2Formats.indexOf(selectedTab);
   return (
-    <>
-      <ModalHeader>
-        Configure Repository{' '}
-        <HelpTooltip>
-          Sync and collaborate with Git
-          <br />
-          <Link href={docsGitSync}>Documentation {<i className="fa fa-external-link-square" />}</Link>
-        </HelpTooltip>
-      </ModalHeader>
-      <ModalBody key={gitRepository ? gitRepository._id : 'new'}>
-        <ErrorBoundary>
-          <Tabs
-            className="react-tabs"
-            onSelect={(index: number) => setTab(oauth2Formats[index])}
-            selectedIndex={selectedTabIndex}
+    <OverlayContainer>
+      <Modal ref={modalRef} {...props}>
+        <ModalHeader>
+          Repository Settings{' '}
+          <HelpTooltip>
+            Sync and collaborate with Git
+            <br />
+            <Link href={docsGitSync}>Documentation {<i className="fa fa-external-link-square" />}</Link>
+          </HelpTooltip>
+        </ModalHeader>
+        <ModalBody>
+          <ErrorBoundary>
+            <Tabs
+              selectedKey={selectedTab}
+              isDisabled={isLoading || hasGitRepository}
+              onSelectionChange={key => {
+                setTab(key as OauthProviderName);
+              }}
+              aria-label='Git repository settings tabs'
+              className="flex-1 w-full h-full flex flex-col"
+            >
+              <TabList className='w-full flex-shrink-0  overflow-x-auto border-solid scro border-b border-b-[--hl-md] bg-[--color-bg] flex items-center h-[--line-height-sm]' aria-label='Request pane tabs'>
+                <Tab
+                  className='flex-shrink-0 h-full flex items-center justify-between cursor-pointer gap-2 outline-none select-none px-3 py-1 text-[--hl] aria-selected:text-[--color-font]  hover:bg-[--hl-sm] hover:text-[--color-font] aria-selected:bg-[--hl-xs] aria-selected:focus:bg-[--hl-sm] aria-selected:hover:bg-[--hl-sm] focus:bg-[--hl-sm] transition-colors duration-300'
+                  id='github'
+                >
+                  <div className="flex gap-2 items-center"><i className="fa fa-github" /> GitHub</div>
+                </Tab>
+                <Tab
+                  className='flex-shrink-0 h-full flex items-center justify-between cursor-pointer gap-2 outline-none select-none px-3 py-1 text-[--hl] aria-selected:text-[--color-font]  hover:bg-[--hl-sm] hover:text-[--color-font] aria-selected:bg-[--hl-xs] aria-selected:focus:bg-[--hl-sm] aria-selected:hover:bg-[--hl-sm] focus:bg-[--hl-sm] transition-colors duration-300'
+                  id='gitlab'
+                >
+                  <div className="flex gap-2 items-center"><i className="fa fa-gitlab" /> GitLab</div>
+                </Tab>
+                <Tab
+                  className='flex-shrink-0 h-full flex items-center justify-between cursor-pointer gap-2 outline-none select-none px-3 py-1 text-[--hl] aria-selected:text-[--color-font]  hover:bg-[--hl-sm] hover:text-[--color-font] aria-selected:bg-[--hl-xs] aria-selected:focus:bg-[--hl-sm] aria-selected:hover:bg-[--hl-sm] focus:bg-[--hl-sm] transition-colors duration-300'
+                  id='custom'
+                >
+                  <div className="flex gap-2 items-center"><i className="fa fa-code-fork" /> Git</div>
+                </Tab>
+              </TabList>
+              <TabPanel className='w-full h-full overflow-y-auto py-2' id='github'>
+                <GitHubRepositorySetupFormGroup
+                  uri={gitRepository?.uri}
+                  onSubmit={onSubmit}
+                />
+              </TabPanel>
+              <TabPanel className='w-full h-full overflow-y-auto py-2' id='gitlab'>
+                <GitLabRepositorySetupFormGroup
+                  uri={gitRepository?.uri}
+                  onSubmit={onSubmit}
+                />
+              </TabPanel>
+              <TabPanel className='w-full h-full overflow-y-auto py-2' id='custom'>
+                <CustomRepositorySettingsFormGroup
+                  gitRepository={gitRepository}
+                  onSubmit={onSubmit}
+                />
+              </TabPanel>
+            </Tabs>
+          </ErrorBoundary>
+        </ModalBody>
+        <ModalFooter>
+          <div
+            style={{
+              display: 'flex',
+              gap: 'var(--padding-md)',
+            }}
           >
-            <TabList>
-              <Tab>
-                <button>
-                  <i className="fa fa-github" /> GitHub
-                </button>
-              </Tab>
-              <Tab>
-                <button>
-                  <i className="fa fa-gitlab" /> GitLab
-                </button>
-              </Tab>
-              <Tab>
-                <button>
-                  <i className="fa fa-code-fork" /> Git
-                </button>
-              </Tab>
-            </TabList>
-            <TabPanel
-              className="tabs__tab-panel"
-              selectedClassName="pad pad-top-sm"
-              style={{
-                overflow: 'hidden',
+            <button
+              className="btn"
+              disabled={!gitRepository}
+              onClick={() => {
+                deleteGitRepositoryFetcher.submit({}, {
+                  action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/git/reset`,
+                  method: 'post',
+                });
               }}
             >
-              <GitHubRepositorySetupFormGroup
-                uri={gitRepository?.uri}
-                onSubmit={onSubmit}
-              />
-            </TabPanel>
-            <TabPanel
-              className="tabs__tab-panel"
-              selectedClassName="pad pad-top-sm"
-              style={{
-                overflow: 'hidden',
-              }}
-            >
-              <GitLabRepositorySetupFormGroup
-                uri={gitRepository?.uri}
-                onSubmit={onSubmit}
-              />
-            </TabPanel>
-            <TabPanel
-              className="tabs__tab-panel scrollable"
-              selectedClassName="pad pad-top-sm"
-            >
-              <CustomRepositorySettingsFormGroup
-                gitRepository={gitRepository}
-                onSubmit={onSubmit}
-              />
-            </TabPanel>
-          </Tabs>
-        </ErrorBoundary>
-      </ModalBody>
-      <ModalFooter>
-        {gitRepository && (
-          <div className="margin-left txt-xs faint monospace selectable">
-            {gitRepository._id}
-          </div>
-        )}
-        <div>
-          {gitRepository !== null && (
-            <button type="button" className="btn" onClick={onReset}>
               Reset
             </button>
-          )}
-          <button type="submit" form={selectedTab} className="btn" data-testid="git-repository-settings-modal__sync-btn">
-            Sync
-          </button>
-        </div>
-      </ModalFooter>
-    </>
+            {hasGitRepository ? (
+              <button
+                type="button"
+                onClick={() => modalRef.current?.hide()}
+                className="btn"
+                data-testid="git-repository-settings-modal__sync-btn-close"
+              >
+                Close
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={isLoading}
+                form={selectedTab}
+                className="btn"
+                data-testid="git-repository-settings-modal__sync-btn"
+              >
+                Sync
+              </button>
+            )}
+          </div>
+        </ModalFooter>
+      </Modal>
+    </OverlayContainer>
   );
 };

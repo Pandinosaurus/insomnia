@@ -1,11 +1,15 @@
+import type { ExtraRenderInfo } from '../../common/render';
 import type { Request } from '../../models/request';
 import type { Response } from '../../models/response';
-import type { PluginStore } from '../../plugins/context';
-import type { NunjucksParsedTagArg } from '../utils';
-
+import type {
+  PluginStore,
+} from '../../plugins/context';
+import type { AppContext } from '../../plugins/context/app';
+import type { HelperContext } from '../base-extension';
+import type { NunjucksActionTag, NunjucksParsedTagArg } from '../utils';
 export type PluginArgumentValue = string | number | boolean;
 
-type DisplayName = string | ((args: NunjucksParsedTagArg[]) => string);
+export type DisplayName = string | ((args: NunjucksParsedTagArg[]) => string);
 
 interface PluginArgumentBase {
   displayName: DisplayName;
@@ -62,7 +66,12 @@ export type PluginArgument =
   | PluginArgumentFile
   | PluginArgumentNumber;
 
-export interface PluginTemplateTagContext {
+export type PluginTemplateTagContext = HelperContext & {
+  app: AppContext;
+  store:  PluginStore;
+  network: {
+    sendRequest(request: Request, extraInfo?: ExtraRenderInfo): Promise<Response>;
+  };
   util: {
     models: {
       request: {
@@ -74,7 +83,7 @@ export interface PluginTemplateTagContext {
       };
     };
   };
-}
+};
 
 export interface PluginTemplateTagActionContext {
   store: PluginStore;
@@ -87,12 +96,12 @@ export interface PluginTemplateTagAction {
 }
 
 export interface PluginTemplateTag {
-  args: PluginArgument[];
+  args: NunjucksParsedTagArg[];
   name: string;
   displayName: DisplayName;
-  disablePreview: () => boolean;
+  disablePreview?: (args: any[]) => boolean;
   description: string;
-  actions: PluginTemplateTagAction[];
+  actions?: NunjucksActionTag[];
   run: (context: PluginTemplateTagContext, ...arg: any[]) => Promise<any> | any;
   deprecated?: boolean;
   validate?: (value: any) => string | null;

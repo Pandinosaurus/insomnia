@@ -1,605 +1,519 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import classnames from 'classnames';
-import React, { Fragment, PureComponent } from 'react';
-import { arrayMove, SortableContainer, SortableElement, SortEndHandler } from 'react-sortable-hoc';
+import type { IconName, IconProp } from '@fortawesome/fontawesome-svg-core';
+import React, { Fragment, useMemo, useRef, useState } from 'react';
+import { Button, Dialog, DropIndicator, GridList, GridListItem, Heading, Label, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Text, ToggleButton, useDragAndDrop } from 'react-aria-components';
+import { useFetcher, useParams, useRouteLoaderData } from 'react-router-dom';
 
-import { AUTOBIND_CFG, DEBOUNCE_MILLIS } from '../../../common/constants';
-import { database as db } from '../../../common/database';
-import { docsTemplateTags } from '../../../common/documentation';
-import * as models from '../../../models';
-import type { Environment } from '../../../models/environment';
-import type { Workspace } from '../../../models/workspace';
-import { Button, ButtonProps } from '../base/button';
-import { Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
-import { Editable } from '../base/editable';
-import { Link } from '../base/link';
-import { type ModalHandle, Modal, ModalProps } from '../base/modal';
-import { ModalBody } from '../base/modal-body';
-import { ModalFooter } from '../base/modal-footer';
-import { ModalHeader } from '../base/modal-header';
-import { PromptButton } from '../base/prompt-button';
-import { EnvironmentEditor } from '../editors/environment-editor';
-import { HelpTooltip } from '../help-tooltip';
-import { Tooltip } from '../tooltip';
-const ROOT_ENVIRONMENT_NAME = 'Base Environment';
+import { docsAfterResponseScript, docsTemplateTags } from '../../../common/documentation';
+import { debounce } from '../../../common/misc';
+import { type Environment, type EnvironmentKvPairData, EnvironmentType, getDataFromKVPair } from '../../../models/environment';
+import { isRemoteProject } from '../../../models/project';
+import { responseTagRegex } from '../../../templating/utils';
+import { useOrganizationPermissions } from '../../hooks/use-organization-features';
+import type { WorkspaceLoaderData } from '../../routes/workspace';
+import { EditableInput } from '../editable-input';
+import { EnvironmentEditor, type EnvironmentEditorHandle, type EnvironmentInfo } from '../editors/environment-editor';
+import { EnvironmentKVEditor } from '../editors/environment-key-value-editor/key-value-editor';
+import { handleToggleEnvironmentType } from '../editors/environment-utils';
+import { Icon } from '../icon';
+import { showAlert } from '.';
 
-interface Props extends ModalProps {
-  handleSetActiveEnvironment: (id: string | null) => void;
-  activeEnvironmentId: string | null;
-}
+export const WorkspaceEnvironmentsEditModal = ({ onClose }: {
+  onClose: () => void;
+}) => {
+  const { organizationId, projectId, workspaceId } = useParams<{ organizationId: string; projectId: string; workspaceId: string }>();
+  const routeData = useRouteLoaderData(
+    ':workspaceId'
+  ) as WorkspaceLoaderData;
+  const environmentEditorRef = useRef<EnvironmentEditorHandle>(null);
 
-interface State {
-  workspace: Workspace | null;
-  isValid: boolean;
-  subEnvironments: Environment[];
-  rootEnvironment: Environment | null;
-  selectedEnvironmentId: string | null;
-}
+  const { features } = useOrganizationPermissions();
 
-interface SidebarListItemProps extends Pick<Props, 'activeEnvironmentId'> {
-  changeEnvironmentName: (environment: Environment, name?: string) => void;
-  environment: Environment;
-  handleActivateEnvironment: ButtonProps<Environment>['onClick'];
-  selectedEnvironment: Environment | null;
-  showEnvironment: ButtonProps<Environment>['onClick'];
-}
+  const createEnvironmentFetcher = useFetcher();
+  const deleteEnvironmentFetcher = useFetcher();
+  const updateEnvironmentFetcher = useFetcher();
+  const duplicateEnvironmentFetcher = useFetcher();
 
-const SidebarListItem = SortableElement<SidebarListItemProps>(({
-  activeEnvironmentId,
-  changeEnvironmentName,
-  environment,
-  handleActivateEnvironment,
-  selectedEnvironment,
-  showEnvironment,
-}: SidebarListItemProps) => {
-  const classes = classnames({
-    'env-modal__sidebar-item': true,
-    'env-modal__sidebar-item--active': selectedEnvironment === environment,
-    // Specify theme because dragging will pull it out to <body>
-    'theme--dialog': true,
-  });
-  return (
-    <li key={environment._id} className={classes}>
-      <Button onClick={showEnvironment} value={environment}>
-        <i className="fa fa-drag-handle drag-handle" />
-        {environment.color ? (
-          <i
-            className="space-right fa fa-circle"
-            style={{
-              color: environment.color,
-            }}
-          />
-        ) : (
-          <i className="space-right fa fa-empty" />
-        )}
+  const {
+    baseEnvironment,
+    activeEnvironment,
+    subEnvironments,
+    activeProject,
+    activeWorkspaceMeta,
+  } = routeData;
+  const [selectedEnvironmentId, setSelectedEnvironmentId] = useState<string>(activeEnvironment._id);
+  const isUsingInsomniaCloudSync = Boolean(isRemoteProject(activeProject) && !activeWorkspaceMeta?.gitRepositoryId);
+  const isUsingGitSync = Boolean(features.gitSync.enabled && activeWorkspaceMeta?.gitRepositoryId);
 
-        {environment.isPrivate && (
-          <Tooltip position="top" message="Environment will not be exported or synced">
-            <i className="fa fa-eye-slash faint space-right" />
-          </Tooltip>
-        )}
+  const selectedEnvironment = [baseEnvironment, ...subEnvironments].find(env => env._id === selectedEnvironmentId);
+  const hasResponseTagEnvironmentVariable = useMemo(() => {
+    if (selectedEnvironment) {
+      return responseTagRegex.test(JSON.stringify(selectedEnvironment.data));
+    }
+    return false;
+  }, [selectedEnvironment]);
 
-        <Editable
-          className="inline-block"
-          onSubmit={name => changeEnvironmentName(environment, name)}
-          value={environment.name}
-        />
-      </Button>
-      <div className="env-status">
-        {environment._id === activeEnvironmentId ? (
-          <i className="fa fa-square active" title="Active Environment" />
-        ) : (
-          <Button onClick={handleActivateEnvironment} value={environment}>
-            <i className="fa fa-square-o inactive" title="Click to activate Environment" />
-          </Button>
-        )}
-      </div>
-    </li>
-  );
-},
-);
+  const environmentActionsList: {
+    id: string;
+    name: string;
+    icon: IconName;
+    action: (environment: Environment) => void;
+  }[] = [{
+    id: 'duplicate',
+    name: 'Duplicate',
+    icon: 'copy',
+    action: async (environment: Environment) => {
+      duplicateEnvironmentFetcher.submit({
+        environmentId: environment._id,
+      },
+        {
+          method: 'post',
+          action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/duplicate`,
+        });
+      },
+    }, {
+        id: 'delete',
+        name: 'Delete',
+        icon: 'trash',
+        action: async (environment: Environment) => {
+          showAlert({
+            title: 'Delete Environment',
+            message: `Are you sure you want to delete "${environment.name}"?`,
+            addCancel: true,
+            okLabel: 'Delete',
+            onConfirm: async () => {
+              deleteEnvironmentFetcher.submit(
+                {
+                  environmentId: environment._id,
+                },
+                {
+                  method: 'post',
+                  action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/delete`,
+                }
+              );
 
-interface SidebarListProps extends Omit<SidebarListItemProps, 'environment'> {
-  environments: Environment[];
-}
+              setSelectedEnvironmentId(baseEnvironment._id);
+            },
+          });
+        },
+      },
+    ];
 
-const SidebarList = SortableContainer<SidebarListProps>(
-  ({
-    activeEnvironmentId,
-    changeEnvironmentName,
-    environments,
-    handleActivateEnvironment,
-    selectedEnvironment,
-    showEnvironment,
-  }: SidebarListProps) => (
-    <ul>
-      {environments.map((environment, index) => (
-        <SidebarListItem
-          activeEnvironmentId={activeEnvironmentId}
-          changeEnvironmentName={changeEnvironmentName}
-          environment={environment}
-          handleActivateEnvironment={handleActivateEnvironment}
-          index={index}
-          key={environment._id}
-          selectedEnvironment={selectedEnvironment}
-          showEnvironment={showEnvironment}
-        />
-      ))}
-    </ul>
-  ),
-);
+  const createEnvironmentActionsList: {
+    id: string;
+    name: string;
+    description: string;
+    icon: IconProp;
+    action: (environment: Environment) => void;
+  }[] = [
+      {
+        id: 'shared',
+        name: 'Shared environment',
+        description: `${isUsingGitSync ? 'Synced with Git Sync and exportable' : isUsingInsomniaCloudSync ? 'Synced with Insomnia Sync and exportable' : 'Exportable'}`,
+        icon: isUsingGitSync ? ['fab', 'git-alt'] : isUsingInsomniaCloudSync ? 'globe-americas' : 'file-arrow-down',
+        action: async () => {
+          createEnvironmentFetcher.submit({
+            isPrivate: false,
+          },
+            {
+              method: 'post',
+              action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/create`,
+              encType: 'application/json',
+            });
+        },
+      }, {
+        id: 'private',
+        name: 'Private environment',
+      description: 'Local and not exportable',
+      icon: 'lock',
+        action: async () => {
+          createEnvironmentFetcher.submit({
+            isPrivate: true,
+          },
+            {
+              method: 'post',
+              action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/create`,
+              encType: 'application/json',
+            });
+        },
+      },
+    ];
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class WorkspaceEnvironmentsEditModal extends PureComponent<Props, State> {
-  environmentEditorRef: EnvironmentEditor | null = null;
-  environmentColorInputRef: HTMLInputElement | null = null;
-  saveTimeout: NodeJS.Timeout | null = null;
-  modal: ModalHandle | null = null;
-  editorKey = 0;
+  const debouncedHandleChange = debounce((value: EnvironmentInfo) => {
+    if (environmentEditorRef.current?.isValid() && selectedEnvironment) {
+      const { object, propertyOrder } = value;
 
-  state: State = {
-    workspace: null,
-    isValid: true,
-    subEnvironments: [],
-    rootEnvironment: null,
-    selectedEnvironmentId: null,
+      updateEnvironmentFetcher.submit({
+        patch: {
+          data: object,
+          dataPropertyOrder: propertyOrder,
+        },
+        environmentId: selectedEnvironment._id,
+      }, {
+        method: 'post',
+        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/update`,
+        encType: 'application/json',
+      });
+    }
+  }, 500);
+
+  const handleKVPairChange = (kvPairData: EnvironmentKvPairData[]) => {
+    if (selectedEnvironment) {
+      const environmentData = getDataFromKVPair(kvPairData);
+      updateEnvironmentFetcher.submit(JSON.stringify({
+        patch: {
+          data: environmentData.data,
+          dataPropertyOrder: environmentData.dataPropertyOrder,
+          kvPairData,
+        },
+        environmentId: selectedEnvironment._id,
+      }), {
+        method: 'post',
+        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/update`,
+        encType: 'application/json',
+      });
+    }
   };
-
-  colorChangeTimeout: NodeJS.Timeout | null = null;
-
-  hide() {
-    this.modal?.hide();
-  }
-
-  _setEditorRef(environmentEditor: EnvironmentEditor) {
-    this.environmentEditorRef = environmentEditor;
-  }
-
-  _setModalRef(modal: ModalHandle) {
-    this.modal = modal;
-  }
-
-  async show(workspace: Workspace) {
-    const { activeEnvironmentId } = this.props;
-
-    // Default to showing the currently active environment
-    if (activeEnvironmentId) {
-      this.setState({
-        selectedEnvironmentId: activeEnvironmentId,
-      });
-    }
-
-    await this._load(workspace);
-    this.modal?.show();
-  }
-
-  async _load(workspace: Workspace | null, environmentToSelect: Environment | null = null) {
-    if (!workspace) {
-      console.warn('Failed to reload environment editor without Workspace');
-      return;
-    }
-
-    const rootEnvironment = await models.environment.getOrCreateForParentId(workspace._id);
-    const subEnvironments = await models.environment.findByParentId(rootEnvironment._id);
-    let selectedEnvironmentId;
-
-    if (environmentToSelect) {
-      selectedEnvironmentId = environmentToSelect._id;
-    } else if (this.state.workspace && workspace._id !== this.state.workspace._id) {
-      // We've changed workspaces, so load the root one
-      selectedEnvironmentId = rootEnvironment._id;
-    } else {
-      // We haven't changed workspaces, so try loading the last environment, and fall back
-      // to the root one
-      selectedEnvironmentId = this.state.selectedEnvironmentId || rootEnvironment._id;
-    }
-
-    this.setState({
-      workspace,
-      rootEnvironment,
-      subEnvironments,
-      selectedEnvironmentId,
-    });
-  }
-
-  async _handleAddEnvironment(isPrivate = false) {
-    const { rootEnvironment, workspace } = this.state;
-
-    if (!rootEnvironment) {
-      console.warn('Failed to add environment. Unknown root environment');
-      return;
-    }
-
-    const parentId = rootEnvironment._id;
-    const environment = await models.environment.create({
-      parentId,
-      isPrivate,
-    });
-    await this._load(workspace, environment);
-  }
-
-  _handleShowEnvironment(_event: React.MouseEvent, environment?: Environment) {
-    // Don't allow switching if the current one has errors
-    if (this.environmentEditorRef && !this.environmentEditorRef.isValid()) {
-      return;
-    }
-
-    if (environment === this._getSelectedEnvironment()) {
-      return;
-    }
-
-    const { workspace } = this.state;
-    this._load(workspace, environment);
-  }
-
-  async _handleDuplicateEnvironment(_event: React.MouseEvent, environment?: Environment) {
-    const { workspace } = this.state;
-    // TODO: unsound non-null assertion
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    const newEnvironment = await models.environment.duplicate(environment!);
-    await this._load(workspace, newEnvironment);
-  }
-
-  async _handleDeleteEnvironment(_event: React.MouseEvent, environment?: Environment) {
-    const { handleSetActiveEnvironment, activeEnvironmentId } = this.props;
-    const { rootEnvironment, workspace } = this.state;
-
-    // Don't delete the root environment
-    if (environment === rootEnvironment) {
-      return;
-    }
-
-    // Unset active environment if it's being deleted
-    // TODO: unsound non-null assertion
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    if (activeEnvironmentId === environment!._id) {
-      handleSetActiveEnvironment(null);
-    }
-
-    // Delete the current one
-    // TODO: unsound non-null assertion
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    await models.environment.remove(environment!);
-    await this._load(workspace, rootEnvironment);
-  }
-
-  async _updateEnvironment(
-    environment: Environment | null,
-    patch: Partial<Environment>,
-    refresh = true,
-  ) {
-    if (environment === null) {
-      return;
-    }
-
-    const { workspace } = this.state;
-    // NOTE: Fetch the environment first because it might not be up to date.
-    // For example, editing the body updates silently.
-    const realEnvironment = await models.environment.getById(environment._id);
-
-    if (!realEnvironment) {
-      return;
-    }
-
-    await models.environment.update(realEnvironment, patch);
-
-    if (refresh) {
-      await this._load(workspace);
-    }
-  }
-
-  async _handleChangeEnvironmentName(environment: Environment, name?: string) {
-    await this._updateEnvironment(environment, {
-      name,
-    });
-  }
-
-  _handleChangeEnvironmentColor(environment: Environment | null, color: string | null) {
-    if (this.colorChangeTimeout !== null) {
-      clearTimeout(this.colorChangeTimeout);
-    }
-    this.colorChangeTimeout = setTimeout(async () => {
-      await this._updateEnvironment(environment, { color });
-    }, DEBOUNCE_MILLIS);
-  }
-
-  _didChange() {
-    this._saveChanges();
-
-    // Call this last in case component unmounted
-    const isValid = this.environmentEditorRef ? this.environmentEditorRef.isValid() : false;
-
-    if (this.state.isValid !== isValid) {
-      this.setState({
-        isValid,
-      });
-    }
-  }
-
-  _getSelectedEnvironment(): Environment | null {
-    const { selectedEnvironmentId, subEnvironments, rootEnvironment } = this.state;
-
-    if (rootEnvironment && rootEnvironment._id === selectedEnvironmentId) {
-      return rootEnvironment;
-    } else {
-      return subEnvironments.find(subEnvironment => subEnvironment._id === selectedEnvironmentId) || null;
-    }
-  }
-
-  componentDidMount() {
-    db.onChange(async changes => {
-      const { selectedEnvironmentId } = this.state;
-
-      for (const change of changes) {
-        const [, doc, fromSync] = change;
-
-        // Force an editor refresh if any changes from sync come in
-        if (doc._id === selectedEnvironmentId && fromSync) {
-          this.editorKey = doc.modified;
-          await this._load(this.state.workspace);
+  const environmentsDragAndDrop = useDragAndDrop({
+    getItems: keys => [...keys].map(key => ({ 'text/plain': key.toString() })),
+    onReorder(e) {
+      const source = [...e.keys][0];
+      const sourceEnv = subEnvironments.find(evt => evt._id === source);
+      const targetEnv = subEnvironments.find(evt => evt._id === e.target.key);
+      if (!sourceEnv || !targetEnv) {
+        return;
+      }
+      const dropPosition = e.target.dropPosition;
+      if (dropPosition === 'before') {
+        const currentEnvIndex = subEnvironments.findIndex(evt => evt._id === targetEnv._id);
+        const previousEnv = subEnvironments[currentEnvIndex - 1];
+        if (!previousEnv) {
+          sourceEnv.metaSortKey = targetEnv.metaSortKey - 1;
+        } else {
+          sourceEnv.metaSortKey = (previousEnv.metaSortKey + targetEnv.metaSortKey) / 2;
         }
       }
-    });
-  }
-
-  _handleSortEnd: SortEndHandler = results => {
-    const { oldIndex, newIndex } = results;
-
-    if (newIndex === oldIndex) {
-      return;
-    }
-
-    const { subEnvironments } = this.state;
-    const newSubEnvironments = arrayMove(subEnvironments, oldIndex, newIndex);
-    this.setState({
-      subEnvironments: newSubEnvironments,
-    });
-    // Do this last so we don't block the sorting
-    db.bufferChanges();
-
-    Promise.all(newSubEnvironments.map((environment, index) => this._updateEnvironment(
-      environment,
-      { metaSortKey: index },
-      false,
-    ))).then(() => {
-      db.flushChanges();
-    });
-  };
-
-  _handleClickColorChange(environment: Environment) {
-    if (!environment.color) {
-      // TODO: fix magic-number. Currently this is the `surprise` background color for the default theme, but we should be grabbing the actual value from the user's actual theme instead.
-      this._handleChangeEnvironmentColor(environment, '#7d69cb');
-    }
-
-    this.environmentColorInputRef?.click();
-  }
-
-  _saveChanges() {
-    // Only save if it's valid
-    if (!this.environmentEditorRef || !this.environmentEditorRef.isValid()) {
-      return;
-    }
-
-    let patch: Partial<Environment>;
-
-    try {
-      const data = this.environmentEditorRef.getValue();
-      patch = {
-        data: data?.object,
-        dataPropertyOrder: data && data.propertyOrder,
-      };
-    } catch (err) {
-      // Invalid JSON probably
-      return;
-    }
-
-    const selectedEnvironment = this._getSelectedEnvironment();
-
-    if (selectedEnvironment) {
-      if (this.saveTimeout !== null) {
-        clearTimeout(this.saveTimeout);
+      if (dropPosition === 'after') {
+        const currentEnvIndex = subEnvironments.findIndex(evt => evt._id === targetEnv._id);
+        const nextEnv = subEnvironments[currentEnvIndex + 1];
+        if (!nextEnv) {
+          sourceEnv.metaSortKey = targetEnv.metaSortKey + 1;
+        } else {
+          sourceEnv.metaSortKey = (nextEnv.metaSortKey + targetEnv.metaSortKey) / 2;
+        }
       }
-      this.saveTimeout = setTimeout(async () => {
-        await this._updateEnvironment(selectedEnvironment, patch);
-      }, DEBOUNCE_MILLIS * 4);
-    }
-  }
 
-  handleInputColorChage(event: React.ChangeEvent<HTMLInputElement>) {
-    this._handleChangeEnvironmentColor(this._getSelectedEnvironment(), event.target.value);
-  }
+      updateEnvironmentFetcher.submit({
+        patch: { metaSortKey: sourceEnv.metaSortKey },
+        environmentId: sourceEnv._id,
+      }, {
+        method: 'post',
+        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/update`,
+        encType: 'application/json',
+      });
+    },
+    renderDropIndicator(target) {
+      if (target.type === 'item') {
+        if (target.dropPosition === 'before' && target.key === baseEnvironment._id) {
+          return <DropIndicator
+            target={target}
+            className="hidden"
+          />;
+        }
+        return <DropIndicator
+          target={target}
+          className="outline-[--color-surprise] outline-1 outline"
+        />;
+      }
 
-  unsetColor(environment: Environment) {
-    this._handleChangeEnvironmentColor(environment, null);
-  }
+      return <DropIndicator
+        target={target}
+        className="outline-[--color-surprise] outline-1 outline"
+      />;
+    },
+  });
 
-  _handleActivateEnvironment: ButtonProps<Environment>['onClick'] = (event, environment) => {
-    const { handleSetActiveEnvironment, activeEnvironmentId } = this.props;
-
-    if (!environment) {
-      return;
-    }
-
-    if (environment._id === activeEnvironmentId) {
-      return;
-    }
-
-    handleSetActiveEnvironment(environment._id);
-    this._handleShowEnvironment(event, environment);
-  };
-
-  render() {
-    const {
-      activeEnvironmentId,
-    } = this.props;
-    const { subEnvironments, rootEnvironment, isValid } = this.state;
-
-    const selectedEnvironment = this._getSelectedEnvironment();
-
-    if (this.environmentColorInputRef !== null) {
-      this.environmentColorInputRef.value = selectedEnvironment?.color || '';
-    }
-
-    const environmentInfo = {
-      object: selectedEnvironment ? selectedEnvironment.data : {},
-      propertyOrder: selectedEnvironment && selectedEnvironment.dataPropertyOrder,
-    };
-
-    return (
-      <Modal ref={this._setModalRef} wide tall {...this.props}>
-        <ModalHeader>Manage Environments</ModalHeader>
-        <ModalBody noScroll className="env-modal">
-          <div className="env-modal__sidebar">
-            <li
-              className={classnames('env-modal__sidebar-root-item', {
-                'env-modal__sidebar-item--active': selectedEnvironment === rootEnvironment,
-              })}
-            >
-              <Button onClick={this._handleShowEnvironment} value={rootEnvironment ?? undefined}>
-                {ROOT_ENVIRONMENT_NAME}
-                <HelpTooltip className="space-left">
-                  The variables in this environment are always available, regardless of which
-                  sub-environment is active. Useful for storing default or fallback values.
-                </HelpTooltip>
-              </Button>
-            </li>
-            <div className="pad env-modal__sidebar-heading">
-              <h3 className="no-margin">Sub Environments</h3>
-              <Dropdown right>
-                <DropdownButton>
-                  <i className="fa fa-plus-circle" />
-                  <i className="fa fa-caret-down" />
-                </DropdownButton>
-                <DropdownItem onClick={this._handleAddEnvironment} value={false}>
-                  <i className="fa fa-eye" /> Environment
-                </DropdownItem>
-                <DropdownItem
-                  onClick={this._handleAddEnvironment}
-                  value={true}
-                  title="Environment will not be exported or synced"
+  return (
+    <ModalOverlay
+      isOpen
+      onOpenChange={isOpen => {
+        !isOpen && onClose();
+      }}
+      className="w-full h-[--visual-viewport-height] fixed z-10 top-0 left-0 flex items-center justify-center bg-black/30"
+    >
+      <Modal
+        onOpenChange={isOpen => {
+          !isOpen && onClose();
+        }}
+        className="flex flex-col w-[calc(100%-var(--padding-xl))] h-[calc(100%-var(--padding-xl))] rounded-md border border-solid border-[--hl-sm] p-[--padding-lg] bg-[--color-bg] text-[--color-font]"
+      >
+        <Dialog
+          className="outline-none flex-1 h-full flex flex-col overflow-hidden"
+        >
+          {({ close }) => (
+            <div className='flex-1 flex flex-col gap-4 overflow-hidden h-full'>
+              <div className='flex gap-2 items-center justify-between'>
+                <Heading slot="title" className='text-2xl'>Manage Environments</Heading>
+                <Button
+                  className="flex flex-shrink-0 items-center justify-center aspect-square h-6 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                  onPress={close}
                 >
-                  <i className="fa fa-eye-slash" /> Private Environment
-                </DropdownItem>
-              </Dropdown>
-            </div>
-            <SidebarList
-              activeEnvironmentId={activeEnvironmentId}
-              handleActivateEnvironment={this._handleActivateEnvironment}
-              environments={subEnvironments}
-              selectedEnvironment={selectedEnvironment}
-              showEnvironment={this._handleShowEnvironment}
-              changeEnvironmentName={this._handleChangeEnvironmentName}
-              onSortEnd={this._handleSortEnd}
-              helperClass="env-modal__sidebar-item--dragging"
-              transitionDuration={0}
-              useWindowAsScrollContainer={false}
-            />
-          </div>
-          <div className="env-modal__main">
-            <div className="env-modal__main__header">
-              <h1>
-                {rootEnvironment === selectedEnvironment ? (
-                  ROOT_ENVIRONMENT_NAME
-                ) : (
-                  <Editable
-                    singleClick
-                    className="wide"
-                    onSubmit={name => {
-                      if (!selectedEnvironment || !name) {
-                        return;
-                      }
-                      this._handleChangeEnvironmentName(selectedEnvironment, name);
-                    }}
-                    value={selectedEnvironment ? selectedEnvironment.name : ''}
-                  />
-                )}
-              </h1>
-
-              {selectedEnvironment && rootEnvironment !== selectedEnvironment ? (
-                <Fragment>
-                  <input
-                    className="hidden"
-                    type="color"
-                    ref={ref => {
-                      this.environmentColorInputRef = ref;
-                    }}
-                    onChange={this.handleInputColorChage}
-                  />
-
-                  <Dropdown className="space-right" right>
-                    <DropdownButton className="btn btn--clicky">
-                      {selectedEnvironment.color && (
-                        <i
-                          className="fa fa-circle space-right"
-                          style={{
-                            color: selectedEnvironment.color,
-                          }}
-                        />
-                      )}
-                      Color <i className="fa fa-caret-down" />
-                    </DropdownButton>
-
-                    <DropdownItem value={selectedEnvironment} onClick={this._handleClickColorChange}>
-                      <i
-                        className="fa fa-circle"
-                        style={{
-                          ...(selectedEnvironment.color ? { color: selectedEnvironment.color } : {}),
+                  <Icon icon="x" />
+                </Button>
+              </div>
+              <div className='rounded flex-1 w-full overflow-hidden divide-x divide-solid divide-[--hl-md] basis-96 flex border border-solid border-[--hl-sm] select-none overflow-y-auto'>
+                <GridList
+                  aria-label="Environments"
+                  items={[baseEnvironment, ...subEnvironments]}
+                  className="overflow-y-auto max-w-xs w-full flex-shrink-0 data-[empty]:py-0 py-[--padding-xs]"
+                  disallowEmptySelection
+                  selectionMode="single"
+                  selectionBehavior='replace'
+                  selectedKeys={[selectedEnvironmentId]}
+                  dragAndDropHooks={environmentsDragAndDrop.dragAndDropHooks}
+                  onSelectionChange={keys => {
+                    if (keys !== 'all') {
+                      const [environmentId] = keys.values();
+                      setSelectedEnvironmentId(environmentId.toString());
+                    }
+                  }}
+                >
+                  {item => {
+                    return (
+                      <GridListItem
+                        key={item._id}
+                        id={item._id}
+                        textValue={item.name}
+                        className="group outline-none select-none"
+                      >
+                        <div className={`${item.parentId === workspaceId ? 'pl-4' : 'pl-8'} pr-4 flex select-none outline-none group-aria-selected:text-[--color-font] relative group-hover:bg-[--hl-xs] group-focus:bg-[--hl-sm] transition-colors gap-2 items-center h-[--line-height-xs] w-full overflow-hidden text-[--hl]`}>
+                          <span className="group-aria-selected:bg-[--color-surprise] transition-colors top-0 left-0 absolute h-full w-[2px] bg-transparent" />
+                          <Icon
+                            icon={
+                              item.isPrivate ? 'lock' : isUsingGitSync ? ['fab', 'git-alt'] : isUsingInsomniaCloudSync ? 'globe-americas' : 'file-arrow-down'
+                            }
+                            className='w-5'
+                            style={{
+                              color: item.color || undefined,
+                            }}
+                          />
+                          <EditableInput
+                            value={item.name}
+                            name="name"
+                            ariaLabel="Environment name"
+                            className="px-1 flex-1 hover:!bg-transparent"
+                            onSubmit={name => {
+                              name && updateEnvironmentFetcher.submit({
+                                patch: {
+                                  name,
+                                },
+                                environmentId: item._id,
+                              }, {
+                                method: 'post',
+                                action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/update`,
+                                encType: 'application/json',
+                              });
+                            }}
+                          />
+                          {item.parentId !== workspaceId && <MenuTrigger>
+                            <Button
+                              aria-label="Environment Actions"
+                              className="opacity-0 items-center hover:opacity-100 focus:opacity-100 data-[pressed]:opacity-100 flex group-focus:opacity-100 group-hover:opacity-100 justify-center h-6 aspect-square data-[pressed]:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                            >
+                              <Icon icon="caret-down" />
+                            </Button>
+                            <Popover className="min-w-max overflow-y-hidden flex flex-col">
+                              <Menu
+                                aria-label="Environment Actions menu"
+                                selectionMode="single"
+                                onAction={key => {
+                                  environmentActionsList
+                                    .find(({ id }) => key === id)
+                                    ?.action(item);
+                                }}
+                                items={environmentActionsList}
+                                className="border select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] py-2 rounded-md overflow-y-auto focus:outline-none"
+                              >
+                                {item => (
+                                  <MenuItem
+                                    key={item.id}
+                                    id={item.id}
+                                    className="flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors"
+                                    aria-label={item.name}
+                                  >
+                                    <Icon className='w-5' icon={item.icon} />
+                                    <span>{item.name}</span>
+                                  </MenuItem>
+                                )}
+                              </Menu>
+                            </Popover>
+                          </MenuTrigger>}
+                          {item.parentId === workspaceId && (
+                            <MenuTrigger>
+                              <Button
+                                aria-label="Create Environment"
+                                data-testid="CreateEnvironmentDropdown"
+                                className="items-center flex justify-center h-6 aspect-square data-[pressed]:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                              >
+                                <Icon icon="plus-circle" />
+                              </Button>
+                              <Popover className="min-w-max overflow-y-hidden flex flex-col">
+                                <Menu
+                                  aria-label="Create Environment menu"
+                                  selectionMode="single"
+                                  onAction={key => {
+                                    createEnvironmentActionsList
+                                      .find(({ id }) => key === id)
+                                      ?.action(item);
+                                  }}
+                                  items={createEnvironmentActionsList}
+                                  className="border select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] py-2 rounded-md overflow-y-auto focus:outline-none"
+                                >
+                                  {item => (
+                                    <MenuItem
+                                      key={item.id}
+                                      id={item.id}
+                                      className="flex flex-col gap-1 px-[--padding-md] py-2 aria-selected:font-bold text-[--color-font] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors"
+                                      aria-label={item.name}
+                                    >
+                                      <div className='flex gap-2 items-center'>
+                                        <Icon className='w-5' icon={item.icon} />
+                                        <span>{item.name}</span>
+                                      </div>
+                                      <Text slot="description" className='text-xs text-[--hl]'>
+                                        {item.description}
+                                      </Text>
+                                    </MenuItem>
+                                  )}
+                                </Menu>
+                              </Popover>
+                            </MenuTrigger>
+                          )}
+                        </div>
+                      </GridListItem>
+                    );
+                  }}
+                </GridList>
+                <div className='flex-1 flex flex-col divide-solid divide-y divide-[--hl-md] overflow-hidden'>
+                  <div className='flex items-center justify-between gap-2 w-full px-[--padding-sm] overflow-hidden'>
+                    <Heading className='flex items-center flex-grow gap-2 text-lg py-2 px-4 overflow-hidden'>
+                      <Icon style={{ color: selectedEnvironment?.color || '' }} className='w-4' icon={selectedEnvironment?.isPrivate ? 'lock' : isUsingGitSync ? ['fab', 'git-alt'] : isUsingInsomniaCloudSync ? 'globe-americas' : 'file-arrow-down'} />
+                      <EditableInput
+                        value={selectedEnvironment?.name || ''}
+                        name="name"
+                        ariaLabel="Environment name"
+                        className="px-1 flex-1"
+                        onSubmit={name => {
+                          name && updateEnvironmentFetcher.submit({
+                            patch: {
+                              name,
+                            },
+                            environmentId: selectedEnvironmentId,
+                          }, {
+                            method: 'post',
+                            action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/update`,
+                            encType: 'application/json',
+                          });
                         }}
                       />
-                      {selectedEnvironment.color ? 'Change Color' : 'Assign Color'}
-                    </DropdownItem>
-
-                    <DropdownItem
-                      value={selectedEnvironment}
-                      onClick={this.unsetColor}
-                      disabled={!selectedEnvironment.color}
-                    >
-                      <i className="fa fa-minus-circle" />
-                      Unset Color
-                    </DropdownItem>
-                  </Dropdown>
-
-                  <Button
-                    value={selectedEnvironment}
-                    onClick={this._handleDuplicateEnvironment}
-                    className="btn btn--clicky space-right"
-                  >
-                    <i className="fa fa-copy" /> Duplicate
-                  </Button>
-
-                  <PromptButton
-                    value={selectedEnvironment}
-                    onClick={this._handleDeleteEnvironment}
-                    className="btn btn--clicky"
-                  >
-                    <i className="fa fa-trash-o" />
-                  </PromptButton>
-                </Fragment>
-              ) : null}
+                    </Heading>
+                    {selectedEnvironment && selectedEnvironment.parentId !== workspaceId && (
+                      <Label className='mr-2 ml-auto flex-shrink-0 flex items-center gap-2 py-1 px-2 bg-[--hl-sm] data-[pressed]:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm'>
+                        <span>Color:</span>
+                        <input
+                          onChange={e => {
+                            const color = e.target.value;
+                            updateEnvironmentFetcher.submit({
+                              patch: {
+                                color,
+                              },
+                              environmentId: selectedEnvironment._id,
+                            }, {
+                              method: 'post',
+                              action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/update`,
+                              encType: 'application/json',
+                            });
+                          }}
+                          type="color"
+                          value={selectedEnvironment?.color || ''}
+                        />
+                      </Label>
+                    )}
+                    {selectedEnvironment && (
+                      <ToggleButton
+                        onChange={isSelected => {
+                          const toggleSwitchEnvironmentType = (newEnvironmentType: EnvironmentType, kvPairData: EnvironmentKvPairData[]) => {
+                            updateEnvironmentFetcher.submit(JSON.stringify({
+                              patch: {
+                                environmentType: newEnvironmentType,
+                                kvPairData: kvPairData,
+                              },
+                              environmentId: selectedEnvironment._id,
+                            }), {
+                              method: 'post',
+                              action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/environment/update`,
+                              encType: 'application/json',
+                            });
+                          };
+                          const isValidJSON = !!environmentEditorRef.current?.isValid();
+                          handleToggleEnvironmentType(isSelected, selectedEnvironment, isValidJSON, toggleSwitchEnvironmentType);
+                        }}
+                        isSelected={selectedEnvironment?.environmentType !== EnvironmentType.KVPAIR}
+                        className="w-[14ch] flex flex-shrink-0 gap-2 items-center justify-start px-2 py-1 rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-colors text-sm"
+                        aria-label={selectedEnvironment?.environmentType !== EnvironmentType.KVPAIR ? 'Table Edit' : 'Raw Edit'}
+                      >
+                        {({ isSelected }) => (
+                          <Fragment>
+                            <Icon icon={!isSelected ? 'toggle-on' : 'toggle-off'} className={`${!isSelected ? 'text-[--color-success]' : ''}`} />
+                            <span>Table View</span>
+                          </Fragment>
+                        )}
+                      </ToggleButton>
+                    )}
+                  </div>
+                  {/* legacy JSON environment do not have environmentType property*/}
+                  {selectedEnvironment && (selectedEnvironment.environmentType === EnvironmentType.JSON || !selectedEnvironment.environmentType) && (
+                    <EnvironmentEditor
+                      ref={environmentEditorRef}
+                      key={selectedEnvironment._id}
+                      onChange={debouncedHandleChange}
+                      environmentInfo={{
+                        object: selectedEnvironment.data,
+                        propertyOrder: selectedEnvironment.dataPropertyOrder,
+                      }}
+                    />
+                  )}
+                  {selectedEnvironment && selectedEnvironment.environmentType === EnvironmentType.KVPAIR &&
+                    <EnvironmentKVEditor
+                      key={selectedEnvironment._id}
+                      data={selectedEnvironment.kvPairData || []}
+                      onChange={handleKVPairChange}
+                    />
+                  }
+                </div>
+              </div>
+              <div className='flex items-center gap-2 justify-between'>
+                <div className='flex flex-col gap-1'>
+                  {/* Warning message when user uses response tag in environment variable and suggest to user after-response script INS-4243 */}
+                  {hasResponseTagEnvironmentVariable &&
+                    <p className='text-sm italic warning'>
+                      <Icon icon="exclamation-circle" /><a href={docsAfterResponseScript}> We suggest to save your response into an environment variable using after-response script.</a>
+                    </p>
+                  }
+                  <p className='text-sm italic'>
+                    * Environment data can be used for <a href={docsTemplateTags}>Nunjucks Templating</a> in your requests.
+                  </p>
+                </div>
+                <Button
+                  onPress={close}
+                  className="hover:no-underline hover:bg-opacity-90 border border-solid border-[--hl-md] py-2 px-3 text-[--color-font] transition-colors rounded-sm"
+                >
+                  Close
+                </Button>
+              </div>
             </div>
-            <div className="env-modal__editor">
-              <EnvironmentEditor
-                ref={this._setEditorRef}
-                key={`${this.editorKey}::${selectedEnvironment ? selectedEnvironment._id : 'n/a'}`}
-                environmentInfo={environmentInfo}
-                didChange={this._didChange}
-              />
-            </div>
-          </div>
-        </ModalBody>
-        <ModalFooter>
-          <div className="margin-left italic txt-sm">
-            * Environment data can be used for&nbsp;
-            <Link href={docsTemplateTags}>Nunjucks Templating</Link> in your requests
-          </div>
-          <button className="btn" disabled={!isValid} onClick={this.hide}>
-            Done
-          </button>
-        </ModalFooter>
+          )}
+        </Dialog>
       </Modal>
-    );
-  }
-}
+    </ModalOverlay>
+  );
+};

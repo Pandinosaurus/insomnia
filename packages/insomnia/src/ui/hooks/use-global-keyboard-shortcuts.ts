@@ -1,34 +1,26 @@
-import { useSelector } from 'react-redux';
-
-import * as models from '../../models';
 import * as plugins from '../../plugins';
 import { useDocBodyKeyboardShortcuts } from '../components/keydown-binder';
 import { showModal } from '../components/modals';
 import { SettingsModal, TAB_INDEX_SHORTCUTS } from '../components/modals/settings-modal';
-import { WorkspaceSettingsModal } from '../components/modals/workspace-settings-modal';
-import {  selectActiveWorkspace, selectActiveWorkspaceMeta, selectSettings } from '../redux/selectors';
+import { useRootLoaderData } from '../routes/root';
+import { useSettingsPatcher } from './use-request';
 
 export const useGlobalKeyboardShortcuts = () => {
-  const activeWorkspace = useSelector(selectActiveWorkspace);
-  const activeWorkspaceMeta = useSelector(selectActiveWorkspaceMeta);
-  const settings = useSelector(selectSettings);
+  const {
+    settings,
+  } = useRootLoaderData();
+  const patchSettings = useSettingsPatcher();
 
   useDocBodyKeyboardShortcuts({
-    workspace_showSettings:
-      () => showModal(WorkspaceSettingsModal, activeWorkspace),
     plugin_reload:
       () => plugins.reloadPlugins(),
+    // TODO: move this to workspace route
     environment_showVariableSourceAndValue:
-      () => models.settings.update(settings, { showVariableSourceAndValue: !settings.showVariableSourceAndValue }),
+      () => patchSettings({ showVariableSourceAndValue: !settings.showVariableSourceAndValue }),
+    // TODO: move this to organization route
     preferences_showGeneral:
       () => showModal(SettingsModal),
     preferences_showKeyboardShortcuts:
-      () => showModal(SettingsModal, TAB_INDEX_SHORTCUTS),
-    sidebar_toggle:
-      () => {
-        if (activeWorkspaceMeta) {
-          models.workspaceMeta.update(activeWorkspaceMeta, { sidebarHidden: !activeWorkspaceMeta.sidebarHidden });
-        }
-      },
+      () => showModal(SettingsModal, { tab: TAB_INDEX_SHORTCUTS }),
   });
 };

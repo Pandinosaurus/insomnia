@@ -1,55 +1,9 @@
-import React, { FC, useRef } from 'react';
-import styled from 'styled-components';
+import React, { type FC } from 'react';
+import { Button } from 'react-aria-components';
 
-import { Dropdown as OriginalDropdown, DropdownHandle } from '../base/dropdown/dropdown';
-import { DROPDOWN_BUTTON_DISPLAY_NAME, DropdownButton as OriginalDropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
-
-const SplitButton = styled.div({
-  display: 'flex',
-  color: 'var(--color-font-surprise)',
-});
-const Dropdown = styled(OriginalDropdown)({
-  display: 'flex',
-  textAlign: 'center',
-  borderLeft: '1px solid var(--hl-md)',
-  background: 'var(--color-danger)',
-  ':hover': {
-    opacity: 0.9,
-  },
-});
-const DropdownButton = styled(OriginalDropdownButton)({
-  paddingRight: 'var(--padding-xs)',
-  paddingLeft: 'var(--padding-xs)',
-});
-DropdownButton.displayName = DROPDOWN_BUTTON_DISPLAY_NAME;
-const ActionButton = styled.button({
-  paddingRight: 'var(--padding-md)',
-  paddingLeft: 'var(--padding-md)',
-  background: 'var(--color-danger)',
-  ':hover': {
-    opacity: 0.9,
-  },
-});
-const Connections = styled.div({
-  display: 'flex',
-  justifyContent: 'space-evenly',
-  width: 25,
-});
-const Connection = styled.div<{ size?: number }>(({ size = 10 }) => ({
-  borderRadius: '50%',
-  width: size,
-  height: size,
-  background: 'var(--color-success)',
-}));
-const TextWrapper = styled.div({
-  textAlign: 'left',
-  width: '100%',
-  paddingLeft: 'var(--padding-xs)',
-});
+import { Dropdown as OriginalDropdown, DropdownItem, ItemContent } from '../base/dropdown';
 
 export const DisconnectButton: FC<{ requestId: string }> = ({ requestId }) => {
-  const dropdownRef = useRef<DropdownHandle>();
   const handleCloseThisRequest = () => {
     window.main.webSocket.close({ requestId });
   };
@@ -57,44 +11,71 @@ export const DisconnectButton: FC<{ requestId: string }> = ({ requestId }) => {
     window.main.webSocket.closeAll();
   };
   return (
-    <SplitButton>
-      <ActionButton
+    <div
+      style={{
+        borderRadius: 'var(--radius-sm)',
+        overflow: 'hidden',
+        display: 'flex',
+        color: 'var(--color-font-surprise)',
+      }}
+    >
+      <button
         type="button"
+        style={{
+          paddingRight: 'var(--padding-md)',
+          paddingLeft: 'var(--padding-md)',
+          background: 'var(--color-danger)',
+        }}
         onClick={handleCloseThisRequest}
       >
         Disconnect
-      </ActionButton>
-      <Dropdown
-        key="dropdown"
+      </button>
+      <OriginalDropdown
         className="tall"
-        right
+        style={{
+          display: 'flex',
+          textAlign: 'center',
+          borderLeft: '1px solid var(--hl-md)',
+          background: 'var(--color-danger)',
+        }}
+        key="dropdown"
         data-testid="DisconnectDropdown__Dropdown"
+        aria-label='Disconnect Dropdown'
+        triggerButton={
+          <Button
+            style={{
+              paddingRight: 'var(--padding-xs)',
+              paddingLeft: 'var(--padding-xs)',
+            }}
+            name="DisconnectDropdown__DropdownButton"
+          >
+            <i className="fa fa-caret-down" />
+          </Button>
+        }
       >
-        <DropdownButton
-          name="DisconnectDropdown__DropdownButton"
-          onClick={() => dropdownRef.current?.show()}
-        >
-          <i className="fa fa-caret-down" />
-        </DropdownButton>
-        <DropdownItem unsetStyles onClick={handleCloseThisRequest}>
-          <Connections>
-            <Connection />
-          </Connections>
-          <TextWrapper>
-            Disconnect this request
-          </TextWrapper>
+        <DropdownItem aria-label='Disconnect this request'>
+          <ItemContent onClick={handleCloseThisRequest}>
+            <div className="flex justify-evenly w-[25px]">
+              <div className='rounded-[50%] w-[10px] h-[10px] bg-success' />
+            </div>
+            <div className="text-left w-full pl-[--padding-xs]">
+              Disconnect this request
+            </div>
+          </ItemContent>
         </DropdownItem>
-        <DropdownItem unsetStyles onClick={handleCloseAllRequests}>
-          <Connections>
-            <Connection size={5} />
-            <Connection size={5} />
-            <Connection size={5} />
-          </Connections>
-          <TextWrapper>
-            Disconnect all requests
-          </TextWrapper>
+        <DropdownItem aria-label='Disconnect all requests'>
+          <ItemContent onClick={handleCloseAllRequests}>
+            <div className="flex justify-evenly w-[25px]">
+              <div className='rounded-[50%] w-[5px] h-[5px] bg-success' />
+              <div className='rounded-[50%] w-[5px] h-[5px] bg-success' />
+              <div className='rounded-[50%] w-[5px] h-[5px] bg-success' />
+            </div>
+            <div className="text-left w-full pl-[--padding-xs]">
+              Disconnect all requests
+            </div>
+          </ItemContent>
         </DropdownItem>
-      </Dropdown>
-    </SplitButton>
+      </OriginalDropdown>
+    </div>
   );
 };

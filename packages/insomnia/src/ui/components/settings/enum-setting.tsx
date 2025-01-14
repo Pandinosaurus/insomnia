@@ -1,11 +1,9 @@
-import { SettingsOfType } from 'insomnia-common';
-import React, { ChangeEventHandler, PropsWithChildren, ReactNode, useCallback } from 'react';
-import { useSelector } from 'react-redux';
+import React, { type PropsWithChildren, type ReactNode } from 'react';
 
-import * as models from '../../../models/index';
-import { selectSettings } from '../../redux/selectors';
+import type { SettingsOfType } from '../../../common/settings';
+import { useSettingsPatcher } from '../../hooks/use-request';
+import { useRootLoaderData } from '../../routes/root';
 import { HelpTooltip } from '../help-tooltip';
-
 interface Props<T> {
   help?: ReactNode;
   label: string;
@@ -22,11 +20,11 @@ export const EnumSetting = <T extends string | number>({
   setting,
   values,
 }: PropsWithChildren<Props<T>>) => {
-  const settings = useSelector(selectSettings);
+  const {
+    settings,
+  } = useRootLoaderData();
 
-  const onChange = useCallback<ChangeEventHandler<HTMLSelectElement>>(async ({ currentTarget: { value } }) => {
-    await models.settings.patch({ [setting]: value });
-  }, [setting]);
+  const patchSettings = useSettingsPatcher();
 
   return (
     <div className="form-control form-control--outlined">
@@ -36,7 +34,8 @@ export const EnumSetting = <T extends string | number>({
         <select
           value={String(settings[setting]) || '__NULL__'}
           name={setting}
-          onChange={onChange}
+          onChange={event => patchSettings({ [setting]: event.currentTarget.value })}
+
         >
           {values.map(({ name, value }) => (
             <option key={value} value={value}>

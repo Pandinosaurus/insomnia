@@ -1,19 +1,20 @@
-import { Schema } from '@develohpanda/fluent-builder';
+import type { Schema } from '@develohpanda/fluent-builder';
 import clone from 'clone';
 
-import { BaseModel, environment, gitRepository, grpcRequest, request, requestGroup, workspace } from '..';
-import { Environment } from '../environment';
-import { GitRepository } from '../git-repository';
-import { GrpcRequest } from '../grpc-request';
-import { Request } from '../request';
-import { RequestGroup } from '../request-group';
-import { Workspace } from '../workspace';
+import { type BaseModel, environment, gitRepository, grpcRequest, request, requestGroup, workspace } from '..';
+import type { Environment } from '../environment';
+import type { GitRepository } from '../git-repository';
+import type { GrpcRequest } from '../grpc-request';
+import type { Request } from '../request';
+import type { RequestGroup } from '../request-group';
+import type { Workspace } from '../workspace';
 
 // move into fluent-builder
 const toSchema = <T>(obj: T): Schema<T> => {
   const cloned = clone(obj);
   const output: Partial<Schema<T>> = {};
 
+    // @ts-expect-error -- mapping unsoundness
   Object.keys(cloned).forEach(key => {
     // @ts-expect-error -- mapping unsoundness
     output[key] = () => cloned[key];
@@ -71,4 +72,6 @@ export const environmentModelSchema: Schema<Environment> = {
   ...baseModelSchema,
   ...toSchema(environment.init()),
   type: () => environment.type,
+  environmentType: () => undefined,
+  kvPairData: () => undefined,
 };

@@ -1,10 +1,9 @@
-import { SettingsOfType } from 'insomnia-common';
-import React, { ChangeEvent, FC } from 'react';
-import { useSelector } from 'react-redux';
+import React, { type FC } from 'react';
 import { useToggle } from 'react-use';
 
-import * as models from '../../../models';
-import { selectSettings } from '../../redux/selectors';
+import type { SettingsOfType } from '../../../common/settings';
+import { useSettingsPatcher } from '../../hooks/use-request';
+import { useRootLoaderData } from '../../routes/root';
 import { HelpTooltip } from '../help-tooltip';
 
 export const MaskedSetting: FC<{
@@ -22,17 +21,14 @@ export const MaskedSetting: FC<{
 }) => {
   const [isHidden, setHidden] = useToggle(true);
 
-  const settings = useSelector(selectSettings);
+  const {
+    settings,
+  } = useRootLoaderData();
 
   if (!settings.hasOwnProperty(setting)) {
     throw new Error(`Invalid setting name ${setting}`);
   }
-
-  const onChange = async (event: ChangeEvent<HTMLInputElement>) => {
-    await models.settings.patch({
-      [setting]: event.currentTarget.value,
-    });
-  };
+  const patchSettings = useSettingsPatcher();
 
   return (
     <div>
@@ -45,7 +41,7 @@ export const MaskedSetting: FC<{
           defaultValue={String(settings[setting])}
           disabled={disabled}
           name={setting}
-          onChange={onChange}
+          onChange={event => patchSettings({ [setting]: event.currentTarget.value })}
           placeholder={placeholder}
           type={!settings.showPasswords && isHidden ? 'password' : 'text'}
         />

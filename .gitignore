@@ -22,13 +22,16 @@ node_modules/
 .yarn-integrity
 .env
 .idea
+*.iml
 .DS_Store
 *test-plugins
 graphql.config.json
 .cache
 .graphqlconfig
 schema.graphql
-packages/insomnia-smoke-test/screenshots
+packages/insomnia-smoke-test/traces
 *.tsbuildinfo
 dist
 .history
+*.node
+rootCA2.*

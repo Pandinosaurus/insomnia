@@ -8,6 +8,7 @@ const BINARY_PREFIX = 'Insomnia.Core';
  * @see https://www.electron.build/configuration/configuration
  */
 const config = {
+  npmRebuild: false,
   appId: 'com.insomnia.app',
   protocols: [
     {
@@ -20,22 +21,16 @@ const config = {
     {
       from: './build',
       to: '.',
-      filter: ['**/*', '!opensource-licenses.txt'],
+      filter: ['**/*'],
     },
     './package.json',
   ],
   publish: null,
-  afterSign: './scripts/afterSignHook.js',
   extraResources: [
     {
       from: './bin',
       to: './bin',
       filter: 'yarn-standalone.js',
-    },
-    {
-      from: './build',
-      to: '.',
-      filter: 'opensource-licenses.txt',
     },
   ],
   extraMetadata: {
@@ -46,6 +41,7 @@ const config = {
     hardenedRuntime: true,
     category: 'public.app-category.developer-tools',
     entitlements: './build/static/entitlements.mac.inherit.plist',
+    entitlementsInherit: './build/static/entitlements.mac.inherit.plist',
     artifactName: `${BINARY_PREFIX}-\${version}.\${ext}`,
     target: [
       {
@@ -57,9 +53,17 @@ const config = {
         arch: 'universal',
       },
     ],
+    mergeASARs: false,
     extendInfo: {
       NSRequiresAquaSystemAppearance: false,
     },
+    // If this step fails its possible apple has new license terms which need to be accepted by logging into https://developer.apple.com/account
+    notarize: {
+      teamId: 'FX44YY62GV',
+    },
+    asarUnpack: [
+      'node_modules/@getinsomnia/node-libcurl',
+    ],
   },
   dmg: {
     window: {
@@ -84,10 +88,9 @@ const config = {
       {
         target: 'squirrel',
       },
-      {
-        target: 'portable',
-      },
     ],
+    sign: './customSign.js',
+    signingHashAlgorithms: ['sha256'], // avoid duplicate signing hook calls https://github.com/electron-userland/electron-builder/issues/3995#issuecomment-505725704
   },
   squirrelWindows: {
     artifactName: `${BINARY_PREFIX}-\${version}.\${ext}`,
@@ -102,6 +105,12 @@ const config = {
     executableName: 'insomnia',
     synopsis: 'The Collaborative API Client and Design Tool',
     category: 'Development',
+    desktop: {
+      Name: 'Insomnia',
+      Comment: 'Insomnia is a cross-platform REST client, built on top of Electron.',
+      Categories: 'Development',
+      Keywords: 'GraphQL;REST;gRPC;SOAP;openAPI;GitOps;',
+    },
     target: [
       {
         target: 'AppImage',
@@ -119,6 +128,17 @@ const config = {
         target: 'snap',
       },
     ],
+  },
+  rpm: {
+    // Prevents RPM from packaging build-id metadata, some of which is the
+    // same across all electron-builder applications, which causes package
+    // conflicts
+    fpm: [
+      '--rpm-rpmbuild-define=_build_id_links none',
+    ],
+  },
+  snap: {
+    base: 'core22',
   },
 };
 

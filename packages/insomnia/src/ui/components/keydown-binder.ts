@@ -1,17 +1,20 @@
-import { KeyboardShortcut, KeyCombination } from 'insomnia-common';
 import { useEffect } from 'react';
-import { useSelector } from 'react-redux';
-import tinykeys, { type KeyBindingMap, createKeybindingsHandler as _createKeybindingsHandler, KeyBindingHandlerOptions } from 'tinykeys';
+import { useRouteLoaderData } from 'react-router-dom';
+import { createKeybindingsHandler as _createKeybindingsHandler, type KeyBindingHandlerOptions, type KeyBindingMap, tinykeys } from 'tinykeys';
 
 import { getPlatformKeyCombinations } from '../../common/hotkeys';
 import { keyboardKeys } from '../../common/keyboard-keys';
-import { selectHotKeyRegistry } from '../redux/selectors';
+import type { KeyboardShortcut, KeyCombination } from '../../common/settings';
+import type { RootLoaderData } from '../routes/root';
 
 const keyCombinationToTinyKeyString = ({ ctrl, alt, shift, meta, keyCode }: KeyCombination): string =>
   `${meta ? 'Meta+' : ''}${alt ? 'Alt+' : ''}${ctrl ? 'Control+' : ''}${shift ? 'Shift+' : ''}` + Object.entries(keyboardKeys).find(([, { keyCode: kc }]) => kc === keyCode)?.[1].code;
 
 export function useKeyboardShortcuts(getTarget: () => HTMLElement, listeners: { [key in KeyboardShortcut]?: (event: KeyboardEvent) => any }) {
-  const hotKeyRegistry = useSelector(selectHotKeyRegistry);
+  const {
+    settings,
+  } = useRouteLoaderData('root') as RootLoaderData;
+  const { hotKeyRegistry } = settings;
 
   useEffect(() => {
     const target = getTarget();

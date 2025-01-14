@@ -1,542 +1,491 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import classnames from 'classnames';
-import { noop } from 'ramda-adjunct';
-import React, { PureComponent } from 'react';
+import React, { type FC, Fragment, useCallback, useMemo } from 'react';
+import { Button, DropIndicator, ListBox, ListBoxItem, Menu, MenuItem, MenuTrigger, Popover, ToggleButton, Toolbar, useDragAndDrop } from 'react-aria-components';
 
-import { AUTOBIND_CFG, DEBOUNCE_MILLIS } from '../../../common/constants';
-import { generateId } from '../../../common/misc';
-import { Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
+import { describeByteSize, generateId } from '../../../common/misc';
+import { useNunjucksEnabled } from '../../context/nunjucks/nunjucks-enabled-context';
+import { FileInputButton } from '../base/file-input-button';
 import { PromptButton } from '../base/prompt-button';
-import { AutocompleteHandler, Pair, Row } from './row';
+import { OneLineEditor } from '../codemirror/one-line-editor';
+import { Icon } from '../icon';
+import { showModal } from '../modals';
+import { CodePromptModal } from '../modals/code-prompt-modal';
 
-const NAME = 'name';
-const VALUE = 'value';
-const DESCRIPTION = 'description';
-const ENTER = 13;
-const BACKSPACE = 8;
-const UP = 38;
-const DOWN = 40;
-const LEFT = 37;
-const RIGHT = 39;
+interface Pair {
+  id?: string;
+  name: string;
+  value: string;
+  description?: string;
+  fileName?: string;
+  type?: string;
+  disabled?: boolean;
+  multiline?: boolean | string;
+}
+
+function createEmptyPair() {
+  return {
+    id: generateId('pair'),
+    name: '',
+    value: '',
+    description: '',
+    disabled: false,
+  };
+}
+
+type AutocompleteHandler = (pair: Pair) => string[] | PromiseLike<string[]>;
 
 interface Props {
-  onChange: Function;
-  pairs: any[];
-  handleGetAutocompleteNameConstants?: AutocompleteHandler;
-  handleGetAutocompleteValueConstants?: AutocompleteHandler;
   allowFile?: boolean;
   allowMultiline?: boolean;
-  sortable?: boolean;
-  maxPairs?: number;
-  namePlaceholder?: string;
-  valuePlaceholder?: string;
   descriptionPlaceholder?: string;
-  valueInputType?: string;
-  disableDelete?: boolean;
-  onToggleDisable?: Function;
-  onChangeType?: Function;
-  onChooseFile?: Function;
-  onDelete?: Function;
-  onCreate?: Function;
-  className?: string;
+  handleGetAutocompleteNameConstants?: AutocompleteHandler;
+  handleGetAutocompleteValueConstants?: AutocompleteHandler;
   isDisabled?: boolean;
-  isWebSocketRequest?: boolean;
+  namePlaceholder?: string;
+  onChange: (pairs: Pair[]) => void;
+  pairs: Pair[];
+  valuePlaceholder?: string;
+  onBlur?: (e: FocusEvent) => void;
+  readOnlyPairs?: Pair[];
 }
 
-interface State {
-  pairs: Props['pairs'];
-  displayDescription: boolean;
-}
-
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class KeyValueEditor extends PureComponent<Props, State> {
-  _focusedPairId: string | null = null;
-  _focusedField: string | null = NAME;
-  // @ts-expect-error -- TSCONVERSION being imported as a value but should be usable as a type
-  private _rows: Row[] = [];
-  _triggerTimeout: NodeJS.Timeout | null = null;
-
-  constructor(props: Props) {
-    super(props);
-    // Migrate and add IDs to all pairs (pairs didn't used to have IDs)
-    const pairs = [...props.pairs];
-
-    for (const pair of pairs) {
-      if (props.maxPairs !== 1 && !pair.id) {
-        pair.id = generateId('pair');
-      }
-    }
-
-    this.state = {
-      pairs,
-      // If any pair has a description, display description field
-      displayDescription: props.pairs.some(p => p.description),
-    };
-  }
-
-  // @ts-expect-error -- TSCONVERSION being imported as a value but should be usable as a type
-  private _setRowRef(n?: Row) {
-    // NOTE: We're not handling unmounting (may lead to a bug)
-    if (n) {
-      this._rows[n.props.pair.id] = n;
-    }
-  }
-
-  _handlePairChange(pair: Pair) {
-    const i = this._getPairIndex(pair);
-
-    const pairs: Pair[] = [
-      ...this.state.pairs.slice(0, i),
-      Object.assign({}, pair),
-      ...this.state.pairs.slice(i + 1),
-    ];
-
-    this._onChange(pairs);
-  }
-
-  _handleDeleteAll() {
-    this._onChange([]);
-  }
-
-  _handleMove(pairToMove: Pair, pairToTarget: Pair, targetOffset: 1 | -1) {
-    if (pairToMove.id === pairToTarget.id) {
-      // Nothing to do
-      return;
-    }
-
-    const withoutPair = this.state.pairs.filter(p => p.id !== pairToMove.id);
-    let toIndex = withoutPair.findIndex(p => p.id === pairToTarget.id);
-
-    // If we're moving below, add 1 to the index
-    if (targetOffset < 0) {
-      toIndex += 1;
-    }
-
-    const pairs = [
-      ...withoutPair.slice(0, toIndex),
-      Object.assign({}, pairToMove),
-      ...withoutPair.slice(toIndex),
-    ];
-
-    this._onChange(pairs);
-  }
-
-  _handlePairDelete(pair: Pair) {
-    const i = this.state.pairs.findIndex(p => p.id === pair.id);
-
-    this._deletePair(i, true);
-  }
-
-  _handleBlurName() {
-    this._focusedField = null;
-  }
-
-  _handleBlurValue() {
-    this._focusedField = null;
-  }
-
-  _handleBlurDescription() {
-    this._focusedField = null;
-  }
-
-  _handleFocusName(pair: Pair) {
-    this._setFocusedPair(pair);
-
-    this._focusedField = NAME;
-
-    // TODO: this may be a bug; pair.id is not an index into _rows
-    this._rows[pair.id as any].focusNameEnd();
-  }
-
-  _handleFocusValue(pair: Pair) {
-    this._setFocusedPair(pair);
-
-    this._focusedField = VALUE;
-
-    // TODO: this may be a bug; pair.id is not an index into _rows
-    this._rows[pair.id as any].focusValueEnd();
-  }
-
-  _handleFocusDescription(pair: Pair) {
-    this._setFocusedPair(pair);
-
-    this._focusedField = DESCRIPTION;
-
-    // TODO: this may be a bug; pair.id is not an index into _rows
-    this._rows[pair.id as any].focusDescriptionEnd();
-  }
-
-  _handleAddFromName() {
-    this._focusedField = NAME;
-
-    this._addPair();
-  }
-
-  // Sometimes multiple focus events come in, so lets debounce it
-  _handleAddFromValue() {
-    this._focusedField = VALUE;
-
-    this._addPair();
-  }
-
-  _handleAddFromDescription() {
-    this._focusedField = DESCRIPTION;
-
-    this._addPair();
-  }
-
-  _handleKeyDown(_pair: Pair, event: KeyboardEvent | React.KeyboardEvent<Element>, value?: any) {
-    if (event.metaKey || event.ctrlKey) {
-      return;
-    }
-
-    if (event.keyCode === ENTER) {
-      this._focusNext(true);
-    } else if (event.keyCode === BACKSPACE) {
-      if (!value) {
-        this._focusPrevious(true);
-      }
-    } else if (event.keyCode === DOWN) {
-      event.preventDefault();
-
-      this._focusNextPair();
-    } else if (event.keyCode === UP) {
-      event.preventDefault();
-
-      this._focusPreviousPair();
-    } else if (event.keyCode === LEFT) {
-      // TODO: Implement this
-    } else if (event.keyCode === RIGHT) {
-      // TODO: Implement this
-    }
-  }
-
-  _onChange(pairs: Pair[]) {
-    this.setState(
-      {
-        pairs,
-      },
-      () => {
-        if (this._triggerTimeout !== null) {
-          clearTimeout(this._triggerTimeout);
-        }
-        this._triggerTimeout = setTimeout(() => {
-          this.props.onChange(pairs);
-        }, DEBOUNCE_MILLIS);
-      },
-    );
-  }
-
-  _addPair(position?: number) {
-    const numPairs = this.state.pairs.length;
-    const { maxPairs } = this.props;
-
-    // Don't add any more pairs
-    if (maxPairs !== undefined && numPairs >= maxPairs) {
-      return;
-    }
-
-    position = position === undefined ? numPairs : position;
-    const pair: Pair = {
-      id: '',
-      name: '',
-      value: '',
-      description: '',
-    };
-
-    // Only add ids if we need 'em
-    if (this.props.maxPairs !== 1) {
-      pair.id = generateId('pair');
-    }
-
-    const pairs = [
-      ...this.state.pairs.slice(0, position),
-      pair,
-      ...this.state.pairs.slice(position),
-    ];
-
-    this._setFocusedPair(pair);
-
-    this._onChange(pairs);
-
-    this.props.onCreate?.();
-  }
-
-  _deletePair(position: number, breakFocus = false) {
-    if (this.props.disableDelete) {
-      return;
-    }
-
-    const focusedPosition = this._getFocusedPairIndex();
-
-    const pair = this.state.pairs[position];
-    this.props.onDelete?.(pair);
-    const pairs = [...this.state.pairs.slice(0, position), ...this.state.pairs.slice(position + 1)];
-
-    if (focusedPosition >= position) {
-      const newPosition = breakFocus ? -1 : focusedPosition - 1;
-
-      this._setFocusedPair(pairs[newPosition]);
-    }
-
-    this._onChange(pairs);
-  }
-
-  _focusNext(addIfValue = false) {
-    if (this.props.maxPairs === 1) {
-      return;
-    }
-
-    if (this._focusedField === NAME) {
-      this._focusedField = VALUE;
-
-      this._updateFocus();
-    } else if (this._focusedField === VALUE && this.state.displayDescription) {
-      this._focusedField = DESCRIPTION;
-
-      this._updateFocus();
-    } else if (this._focusedField === VALUE || this._focusedField === DESCRIPTION) {
-      this._focusedField = NAME;
-
-      if (addIfValue) {
-        this._addPair(this._getFocusedPairIndex() + 1);
-      } else {
-        this._focusNextPair();
-      }
-    }
-  }
-
-  _focusPrevious(deleteIfEmpty = false) {
-    if (this._focusedField === DESCRIPTION) {
-      this._focusedField = VALUE;
-
-      this._updateFocus();
-    } else if (this._focusedField === VALUE) {
-      this._focusedField = NAME;
-
-      this._updateFocus();
-    } else if (this._focusedField === NAME) {
-      const p = this._getFocusedPair();
-
-      const notEmpty = !p.name && !p.value && !p.fileName;
-
-      if (!this.props.disableDelete && notEmpty && deleteIfEmpty) {
-        this._focusedField = VALUE;
-
-        this._deletePair(this._getFocusedPairIndex());
-      } else if (!p.name) {
-        this._focusedField = VALUE;
-
-        this._focusPreviousPair();
-      }
-    }
-  }
-
-  _focusNextPair() {
-    if (this.props.maxPairs === 1) {
-      return;
-    }
-
-    const i = this._getFocusedPairIndex();
-
-    if (i === -1) {
-      // No focused pair currently
-      return;
-    }
-
-    if (i >= this.state.pairs.length - 1) {
-      // Focused on last one, so add another
-      this._addPair();
+export const KeyValueEditor: FC<Props> = ({
+  allowFile,
+  allowMultiline,
+  descriptionPlaceholder,
+  handleGetAutocompleteNameConstants,
+  handleGetAutocompleteValueConstants,
+  isDisabled,
+  namePlaceholder,
+  onChange,
+  pairs,
+  valuePlaceholder,
+  readOnlyPairs,
+}) => {
+  const [showDescription, setShowDescription] = React.useState(false);
+  const { enabled: nunjucksEnabled } = useNunjucksEnabled();
+  let pairsListItems = useMemo(
+    () => pairs.length > 0 ? pairs.map(pair => ({ ...pair, id: pair.id || generateId('pair') })) : [createEmptyPair()],
+    // Ensure same array data will not generate different kvPairs to avoid flash issue
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [JSON.stringify(pairs)]
+  );
+  const initialReadOnlyItems = readOnlyPairs?.map(pair => ({ ...pair, id: pair.id || generateId('pair') })) || [];
+
+  const upsertPair = useCallback(function upsertPair(pairsListItems: Pair[], pair: Pair) {
+    if (pairsListItems.find(item => item.id === pair.id)) {
+      onChange(pairsListItems.map(item => (item.id === pair.id ? pair : item)));
     } else {
-      this._setFocusedPair(this.state.pairs[i + 1]);
-
-      this._updateFocus();
+      onChange([...pairsListItems, pair]);
     }
-  }
+  }, [onChange]);
 
-  _focusPreviousPair() {
-    if (this.props.maxPairs === 1) {
-      return;
+  const repositionInArray = (allItems: Pair[], itemsToMove: string[], targetIndex: number) => {
+    const removed = allItems.filter(item => item.id !== itemsToMove[0]);
+    const itemToMove = allItems.find(item => item.id === itemsToMove[0]);
+    if (itemToMove) {
+      return [...removed.slice(0, targetIndex), itemToMove, ...removed.slice(targetIndex)];
     }
+    return allItems;
+  };
+  const { dragAndDropHooks } = useDragAndDrop({
+    getItems: keys =>
+      [...keys].map(key => ({ 'text/plain': `${pairsListItems.find(item => item.id === key.toString())?.id}` })),
+    onReorder(e) {
+      onChange(repositionInArray(pairsListItems, [...e.keys].map(key => key.toString()), pairsListItems.findIndex(item => item.id === e.target.key.toString())));
+    },
+    renderDragPreview(items) {
+      const pair = pairsListItems.find(item => item.id === items[0]['text/plain']) || createEmptyPair();
 
-    const i = this._getFocusedPairIndex();
+      const element = document.querySelector(`[data-key="${pair.id}"]`);
 
-    if (i > 0) {
-      this._setFocusedPair(this.state.pairs[i - 1]);
+      const isFile = 'type' in pair && pair.type === 'file';
+      const isMultiline = 'type' in pair && pair.type === 'text' && pair.multiline;
+      const bytes = isMultiline ? Buffer.from(pair.value, 'utf8').length : 0;
 
-      this._updateFocus();
-    }
-  }
-
-  _updateFocus() {
-    const pair = this._getFocusedPair();
-
-    const id = pair ? pair.id : 'n/a';
-    const row = this._rows[id];
-
-    if (!row) {
-      return;
-    }
-
-    if (this._focusedField === NAME) {
-      row.focusNameEnd();
-    } else if (this._focusedField === VALUE) {
-      row.focusValueEnd();
-    } else if (this._focusedField === DESCRIPTION) {
-      row.focusDescriptionEnd();
-    }
-  }
-
-  _getPairIndex(pair: Pair) {
-    if (pair) {
-      return this.state.pairs.findIndex(p => p.id === pair.id);
-    } else {
-      return -1;
-    }
-  }
-
-  _getFocusedPairIndex() {
-    return this._getPairIndex(this._getFocusedPair());
-  }
-
-  _getFocusedPair() {
-    return this.state.pairs.find(p => p.id === this._focusedPairId) || null;
-  }
-
-  _setFocusedPair(pair: Pair) {
-    if (pair) {
-      this._focusedPairId = pair.id || 'n/a';
-    } else {
-      this._focusedPairId = null;
-    }
-  }
-
-  _toggleDescription() {
-    this.setState({
-      displayDescription: !this.state.displayDescription,
-    });
-  }
-
-  componentDidUpdate() {
-    this._updateFocus();
-  }
-
-  render() {
-    const {
-      maxPairs,
-      className,
-      valueInputType,
-      valuePlaceholder,
-      namePlaceholder,
-      descriptionPlaceholder,
-      handleGetAutocompleteNameConstants,
-      handleGetAutocompleteValueConstants,
-      allowFile,
-      allowMultiline,
-      sortable,
-      disableDelete,
-      isDisabled,
-      isWebSocketRequest,
-    } = this.props;
-    const { pairs } = this.state;
-
-    const classes = classnames('key-value-editor', 'wide', className);
-    const hasMaxPairsAndNotExceeded = !maxPairs || pairs.length < maxPairs;
-    const showNewHeaderInput = !isDisabled && hasMaxPairsAndNotExceeded;
-    const readOnlyPairs = [
-      { name: 'Connection', value: 'Upgrade' },
-      { name: 'Upgrade', value: 'websocket' },
-      { name: 'Sec-WebSocket-Key', value: '<calculated at runtime>' },
-      { name: 'Sec-WebSocket-Version', value: '13' },
-      { name: 'Sec-WebSocket-Extensions', value: 'permessage-deflate; client_max_window_bits' },
-    ];
-    return (
-      <ul className={classes}>
-        {isWebSocketRequest ? readOnlyPairs.map((pair, i) => (
-          <Row
-            key={i}
-            index={i}
-            sortable={true}
-            displayDescription={this.state.displayDescription}
-            descriptionPlaceholder={descriptionPlaceholder}
+      let valueEditor = (
+        <div className="relative h-full w-full flex flex-1 px-2">
+          <OneLineEditor
+            id={'key-value-editor__value' + pair.id}
+            placeholder={valuePlaceholder || 'Value'}
+            defaultValue={pair.value}
             readOnly
-            hideButtons
-            forceInput
-            pair={pair}
+            getAutocompleteConstants={() => handleGetAutocompleteValueConstants?.(pair) || []}
+            onChange={() => { }}
           />
-        )) : null}
-        {pairs.map((pair, i) => (
-          <Row
-            noDelete={disableDelete}
-            key={pair.id || 'no-id'}
-            index={i} // For dragging
-            ref={this._setRowRef}
-            sortable={sortable}
-            displayDescription={this.state.displayDescription}
-            namePlaceholder={namePlaceholder}
-            valuePlaceholder={valuePlaceholder}
-            descriptionPlaceholder={descriptionPlaceholder}
-            valueInputType={valueInputType}
-            onChange={this._handlePairChange}
-            onDelete={this._handlePairDelete}
-            onFocusName={this._handleFocusName}
-            onFocusValue={this._handleFocusValue}
-            onFocusDescription={this._handleFocusDescription}
-            onKeyDown={this._handleKeyDown}
-            onBlurName={this._handleBlurName}
-            onBlurValue={this._handleBlurValue}
-            onBlurDescription={this._handleBlurDescription}
-            onMove={this._handleMove}
-            handleGetAutocompleteNameConstants={handleGetAutocompleteNameConstants}
-            handleGetAutocompleteValueConstants={handleGetAutocompleteValueConstants}
-            allowMultiline={allowMultiline}
-            allowFile={allowFile}
-            readOnly={isDisabled}
-            hideButtons={isDisabled}
-            pair={pair}
-          />
-        ))}
+        </div>
+      );
 
-        {showNewHeaderInput ? (
-          <Row
-            key="empty-row"
-            hideButtons
-            sortable
-            noDropZone
-            forceInput
-            index={-1}
-            onChange={noop}
-            onDelete={noop}
-            renderLeftIcon={() => (
-              <Dropdown>
-                <DropdownButton>
-                  <i className="fa fa-cog" />
-                </DropdownButton>
-                <DropdownItem onClick={this._handleDeleteAll} buttonClass={PromptButton}>
-                  Delete All Items
-                </DropdownItem>
-                <DropdownItem onClick={this._toggleDescription}>Toggle Description</DropdownItem>
-              </Dropdown>
-            )}
-            className="key-value-editor__row-wrapper--clicker"
-            displayDescription={this.state.displayDescription}
-            namePlaceholder={`New ${namePlaceholder}`}
-            valuePlaceholder={`New ${valuePlaceholder}`}
-            descriptionPlaceholder={`New ${descriptionPlaceholder}`}
-            onFocusName={this._handleAddFromName}
-            onFocusValue={this._handleAddFromValue}
-            onFocusDescription={this._handleAddFromDescription}
-            allowMultiline={allowMultiline}
-            allowFile={allowFile}
-            pair={{
-              name: '',
-              value: '',
-            }}
+      if (isFile) {
+        valueEditor = (
+          <FileInputButton
+            showFileName
+            showFileIcon
+            disabled
+            className="px-2 py-1 w-full flex flex-1 items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm overflow-hidden"
+            path={pair.fileName || ''}
+            onChange={() => { }}
           />
-        ) : null}
-      </ul>
-    );
-  }
-}
+        );
+      }
+
+      if (isMultiline) {
+        valueEditor = (
+          <Button
+            isDisabled
+            className="px-2 py-1 w-full flex flex-1 items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm overflow-hidden"
+          >
+            <i className="fa fa-pencil-square-o space-right" />
+            {bytes > 0 ? describeByteSize(bytes, true) : 'Click to Edit'}
+          </Button>
+        );
+      }
+
+      return (
+        <div
+          className="flex outline-none bg-[--color-bg] flex-shrink-0 h-[--line-height-sm] items-center gap-2 px-2"
+          style={{
+            width: element?.clientWidth,
+          }}
+        >
+          <div slot="drag" className="cursor-grab invisible p-2 w-5 flex focus-visible:bg-[--hl-sm] justify-center items-center flex-shrink-0">
+            <Icon icon="grip-vertical" className='w-2 text-[--hl]' />
+          </div>
+          <div className="relative h-full w-full flex flex-1 px-2">
+            <OneLineEditor
+              id={'key-value-editor__name' + pair.id}
+              placeholder={namePlaceholder || 'Name'}
+              defaultValue={pair.name}
+              readOnly
+              onChange={() => { }}
+            />
+          </div>
+          {valueEditor}
+          {showDescription && (
+            <div className="relative h-full w-full flex flex-1 px-2">
+              <OneLineEditor
+                id={'key-value-editor__description' + pair.id}
+                placeholder={descriptionPlaceholder || 'Description'}
+                defaultValue={pair.description || ''}
+                readOnly
+                onChange={() => { }}
+              />
+            </div>
+          )}
+          <div className="flex flex-shrink-0 items-center gap-2 w-[5.75rem]" />
+        </div>
+      );
+    },
+    renderDropIndicator(target) {
+      return (
+        <DropIndicator
+          target={target}
+          className="data-[drop-target]:outline-[--color-surprise] z-10 outline-1 outline"
+        />
+      );
+    },
+  });
+
+  return (
+    <Fragment>
+      <Toolbar className="content-box sticky top-0 z-10 bg-[var(--color-bg)] flex flex-shrink-0 border-b border-[var(--hl-md)] h-[var(--line-height-sm)] text-[var(--font-size-sm)]">
+        <Button
+          className="px-4 py-1 h-full flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] text-xs hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all"
+          onPress={() => {
+            const id = generateId('pair');
+            upsertPair(pairsListItems, { id, name: '', value: '', description: '', disabled: false });
+          }}
+        >
+          <Icon icon="plus" /> Add
+        </Button>
+        <PromptButton
+          disabled={pairsListItems.length === 0}
+          onClick={() => {
+            pairsListItems = [createEmptyPair()];
+            onChange([]);
+          }}
+          className="px-4 py-1 h-full flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] text-xs hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all"
+        >
+          <Icon icon="trash-can" />
+          <span>Delete all</span>
+        </PromptButton>
+        <ToggleButton
+          className="px-4 py-1 h-full flex items-center justify-center gap-2 text-[--color-font] text-xs hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all"
+          onChange={setShowDescription}
+          isSelected={showDescription}
+        >
+          {({ isSelected }) => (
+            <>
+              <Icon className={isSelected ? 'text-[--color-success]' : ''} icon={isSelected ? 'toggle-on' : 'toggle-off'} />
+              <span>Description</span>
+            </>
+          )}
+        </ToggleButton>
+      </Toolbar>
+      {initialReadOnlyItems.length > 0 && (
+        <ListBox
+          aria-label='Key-value pairs readonly'
+          selectionMode='none'
+          dependencies={[showDescription, nunjucksEnabled]}
+          className="flex pt-1 flex-col w-full overflow-y-auto flex-1 relative"
+          items={initialReadOnlyItems}
+        >
+          {pair => {
+            const isFile = pair.type === 'file';
+            const isMultiline = pair.type === 'text' && pair.multiline;
+            const bytes = isMultiline ? Buffer.from(pair.value, 'utf8').length : 0;
+
+            let valueEditor = (
+              <div className="relative h-full w-full flex flex-1 px-2">
+                <OneLineEditor
+                  id={'key-value-editor__value' + pair.id}
+                  placeholder={valuePlaceholder || 'Value'}
+                  defaultValue={pair.value}
+                  readOnly
+                  getAutocompleteConstants={() => handleGetAutocompleteValueConstants?.(pair) || []}
+                  onChange={() => { }}
+                />
+              </div>
+            );
+
+            if (isFile) {
+              valueEditor = (
+                <FileInputButton
+                  showFileName
+                  showFileIcon
+                  disabled
+                  className="px-2 py-1 w-full flex flex-1 items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm overflow-hidden"
+                  path={pair.fileName || ''}
+                  onChange={() => { }}
+                />
+              );
+            }
+
+            if (isMultiline) {
+              valueEditor = (
+                <Button
+                  isDisabled
+                  className="px-2 py-1 w-full flex flex-1 items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm overflow-hidden"
+                >
+                  <i className="fa fa-pencil-square-o space-right" />
+                  {bytes > 0 ? describeByteSize(bytes, true) : 'Click to Edit'}
+                </Button>
+              );
+            }
+
+            return (
+              <ListBoxItem textValue={pair.name + '-' + pair.value} className="flex outline-none bg-[--color-bg] flex-shrink-0 h-[--line-height-sm] items-center gap-2 px-2">
+                <div slot="drag" className="cursor-grab invisible p-2 w-5 flex focus-visible:bg-[--hl-sm] justify-center items-center flex-shrink-0">
+                  <Icon icon="grip-vertical" className='w-2 text-[--hl]' />
+                </div>
+                <div className="relative h-full w-full flex flex-1 px-2">
+                  <OneLineEditor
+                    id={'key-value-editor__name' + pair.id}
+                    placeholder={namePlaceholder || 'Name'}
+                    defaultValue={pair.name}
+                    readOnly
+                    onChange={() => { }}
+                  />
+                </div>
+                {valueEditor}
+                {showDescription && (
+                  <div className="relative h-full w-full flex flex-1 px-2">
+                    <OneLineEditor
+                      id={'key-value-editor__description' + pair.id}
+                      placeholder={descriptionPlaceholder || 'Description'}
+                      defaultValue={pair.description || ''}
+                      readOnly
+                      onChange={() => { }}
+                    />
+                  </div>
+                )}
+                <div className="flex flex-shrink-0 items-center gap-2 w-[5.75rem]" />
+              </ListBoxItem>
+            );
+          }}
+        </ListBox>
+      )}
+      <ListBox
+        aria-label='Key-value pairs'
+        selectionMode='none'
+        className="flex pt-1 flex-col w-full overflow-y-auto flex-1 relative"
+        dragAndDropHooks={dragAndDropHooks}
+        dependencies={[upsertPair, showDescription, nunjucksEnabled]}
+        items={pairsListItems}
+      >
+        {pair => {
+          const isFile = pair.type === 'file';
+          const isMultiline = pair.type === 'text' && pair.multiline;
+          const bytes = isMultiline ? Buffer.from(pair.value, 'utf8').length : 0;
+
+          let valueEditor = (
+            <OneLineEditor
+              id={'key-value-editor__value' + pair.id}
+              key={'key-value-editor__value' + pair.id + pair.disabled}
+              placeholder={valuePlaceholder || 'Value'}
+              defaultValue={pair.value}
+              readOnly={pair.disabled || isDisabled}
+              getAutocompleteConstants={() => handleGetAutocompleteValueConstants?.(pair) || []}
+              onChange={value => upsertPair(pairsListItems, { ...pair, value })}
+            />
+          );
+
+          if (isFile) {
+            valueEditor = (
+              <FileInputButton
+                showFileName
+                showFileIcon
+                disabled={pair.disabled || isDisabled}
+                className="px-2 py-1 w-full fle flex-shrink-0 flex-1 items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm overflow-hidden"
+                path={pair.fileName || ''}
+                onChange={fileName => upsertPair(pairsListItems, { ...pair, fileName })}
+              />
+            );
+          }
+
+          if (isMultiline) {
+            valueEditor = (
+              <Button
+                isDisabled={pair.disabled || isDisabled}
+                className="px-2 py-1 w-full flex flex-1 items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm overflow-hidden"
+                onPress={() => showModal(CodePromptModal, {
+                  submitName: 'Done',
+                  title: `Edit ${pair.name}`,
+                  defaultValue: pair.value,
+                  enableRender: nunjucksEnabled,
+                  mode: pair.multiline && typeof pair.multiline === 'string' ? pair.multiline : 'text/plain',
+                  onChange: (value: string) => upsertPair(pairsListItems, { ...pair, value }),
+                  onModeChange: (mode: string) => upsertPair(pairsListItems, { ...pair, multiline: mode }),
+                })}
+              >
+                <i className="fa fa-pencil-square-o space-right" />
+                {bytes > 0 ? describeByteSize(bytes, true) : 'Click to Edit'}
+              </Button>
+            );
+          }
+
+          let selectedValueType = 'text';
+
+          if (isFile) {
+            selectedValueType = 'file';
+          } else if (isMultiline) {
+            selectedValueType = 'multiline-text';
+          }
+
+          return (
+            <ListBoxItem
+              id={pair.id}
+              key={pair.id}
+              textValue={pair.name + '-' + pair.value}
+              style={{ opacity: pair.disabled ? '0.4' : '1' }}
+              className={`grid relative outline-none bg-[--color-bg] flex-shrink-0 h-[--line-height-sm] gap-2 px-2 ${showDescription ? '[grid-template-columns:max-content_1fr_1fr_1fr_max-content]' : '[grid-template-columns:max-content_1fr_1fr_max-content]'}`}
+            >
+              <div slot="drag" className="cursor-grab p-2 w-5 flex focus-visible:bg-[--hl-sm] justify-center items-center flex-shrink-0">
+                <Icon icon="grip-vertical" className='w-2 text-[--hl]' />
+              </div>
+              <OneLineEditor
+                id={'key-value-editor__name' + pair.id}
+                key={'key-value-editor__name' + pair.id + pair.disabled}
+                placeholder={namePlaceholder || 'Name'}
+                defaultValue={pair.name}
+                readOnly={pair.disabled || isDisabled}
+                getAutocompleteConstants={() => handleGetAutocompleteNameConstants?.(pair) || []}
+                onChange={name => {
+                  upsertPair(pairsListItems, { ...pair, name });
+                }}
+              />
+              {valueEditor}
+              {showDescription && (
+                <OneLineEditor
+                  id={'key-value-editor__description' + pair.id}
+                  key={'key-value-editor__description' + pair.id + pair.disabled}
+                  placeholder={descriptionPlaceholder || 'Description'}
+                  defaultValue={pair.description || ''}
+                  readOnly={pair.disabled || isDisabled}
+                  onChange={description => upsertPair(pairsListItems, { ...pair, description })}
+                />
+              )}
+              <Toolbar className="flex items-center gap-1">
+                <MenuTrigger>
+                  <Button
+                    aria-label="Text mode"
+                    className="flex items-center justify-center h-7 aspect-square aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                  >
+                    <Icon icon="caret-down" />
+                  </Button>
+                  <Popover className="min-w-max overflow-y-hidden flex flex-col">
+                    <Menu
+                      className="border select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] py-2 rounded-md overflow-y-auto focus:outline-none"
+                      aria-label="Create a new request"
+                      selectionMode="single"
+                      selectedKeys={[selectedValueType]}
+                      items={[
+                        {
+                          id: 'text',
+                          name: 'Text',
+                          textValue: 'Text',
+                          onAction: () => upsertPair(pairsListItems, { ...pair, type: 'text', multiline: false }),
+                        },
+                        ...allowMultiline ? [
+                          {
+                            id: 'multiline-text',
+                            name: 'Multiline text',
+                            textValue: 'Multiline text',
+                            onAction: () => upsertPair(pairsListItems, { ...pair, type: 'text', multiline: true }),
+                          },
+                        ] : [],
+                        ...allowFile ? [
+                          {
+                            id: 'file',
+                            name: 'File',
+                            textValue: 'File',
+                            onAction: () => upsertPair(pairsListItems, { ...pair, type: 'file' }),
+                          },
+                        ] : [],
+                      ]}
+                    >
+                      {item => (
+                        <MenuItem
+                          key={item.id}
+                          id={item.id}
+                          onAction={item.onAction}
+                          className="flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors"
+                          aria-label={item.name}
+                        >
+                          <span>{item.name}</span>
+                        </MenuItem>
+                      )}
+                    </Menu>
+                  </Popover>
+                </MenuTrigger>
+                <ToggleButton
+                  className="flex items-center justify-center h-7 aspect-square rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                  onChange={isSelected => upsertPair(pairsListItems, { ...pair, disabled: !isSelected })}
+                  isSelected={!pair.disabled}
+                >
+                  <Icon icon={pair.disabled ? 'square' : 'check-square'} />
+                </ToggleButton>
+                <PromptButton
+                  disabled={pair.id === 'pair-empty' || isDisabled}
+                  className="flex items-center disabled:opacity-50 justify-center h-7 aspect-square aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                  confirmMessage=''
+                  doneMessage=''
+                  onClick={() => {
+                    if (pairsListItems.find(item => item.id === pair.id)) {
+                      pairsListItems = pairsListItems.filter(item => item.id !== pair.id);
+                      if (pairsListItems.length === 0) {
+                        pairsListItems.push(createEmptyPair());
+                      }
+                      onChange(pairsListItems);
+                    }
+                  }}
+                >
+                  <Icon icon="trash-can" />
+                </PromptButton>
+              </Toolbar>
+            </ListBoxItem>
+          );
+        }}
+      </ListBox>
+    </Fragment>
+  );
+};

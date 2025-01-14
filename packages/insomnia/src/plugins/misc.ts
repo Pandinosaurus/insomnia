@@ -1,11 +1,9 @@
 import Color from 'color';
-import { forEach, keys, path } from 'ramda';
-import { unreachableCase } from 'ts-assert-unreachable';
 
 import { getAppDefaultTheme } from '../common/constants';
-import { ThemeSettings } from '../models/settings';
+import type { ThemeSettings } from '../models/settings';
 import type { Theme } from './index';
-import { ColorScheme, getThemes } from './index';
+import { type ColorScheme, getThemes } from './index';
 
 export type HexColor = `#${string}`;
 export type RGBColor = `rgb(${string})`;
@@ -97,11 +95,21 @@ export const validateThemeName = (name: string) => {
 export const containsNunjucks = (data: string) => (
   data.includes('{{') && data.includes('}}')
 );
+const getChildValue = (theme: any, path: string[]) => {
+  return path.reduce((acc, v: string) => {
+    try {
+      acc = acc[v];
+    } catch (e) {
+      return undefined;
+    }
+    return acc;
+  }, theme);
+};
 
 /** In July 2022, the ability to use Nunjucks in themes was removed. This validator is a means of alerting any users of a theme depending on Nunjucks.  The failure mode for this case (in practice) is that the CSS variable will just not be used, thus it's not something we'd want to go as far as throwing an error about. */
 export const validateTheme = (pluginTheme: PluginTheme) => {
   const checkIfContainsNunjucks = (pluginTheme: PluginTheme) => (keyPath: string[]) => {
-    const data = path(keyPath, pluginTheme.theme);
+    const data = getChildValue(pluginTheme.theme, keyPath);
 
     if (!data) {
       return;
@@ -112,9 +120,9 @@ export const validateTheme = (pluginTheme: PluginTheme) => {
     }
 
     if (typeof data === 'object') {
-      forEach(ownKey => {
+      Object.keys(data).forEach(ownKey => {
         checkIfContainsNunjucks(pluginTheme)([...keyPath, ownKey]);
-      }, keys(data));
+      });
     }
   };
 
@@ -122,17 +130,17 @@ export const validateTheme = (pluginTheme: PluginTheme) => {
 
   check(['rawCss']);
 
-  forEach<keyof ThemeBlock>(rootPath => {
-    check([rootPath]);
-
-    forEach(style => {
-      check(['styles', style, rootPath]);
-    }, keys<StylesThemeBlocks>(pluginTheme.theme.styles ?? {}));
-  }, [
+  [
     'background',
     'foreground',
     'highlight',
-  ]);
+  ].forEach(rootPath => {
+    check([rootPath]);
+
+    Object.keys(pluginTheme.theme.styles ?? {}).forEach(style => {
+      check(['styles', style, rootPath]);
+    });
+  });
 
 };
 
@@ -213,7 +221,7 @@ function getThemeBlockCSS(block?: ThemeBlock) {
       addVar(variable, rgb.string());
       addVar(`${variable}-rgb`, rgb.array().join(', '));
     } catch (err) {
-      console.log('Failed to parse theme color', value);
+      console.log('[theme] Failed to parse theme color', value);
     }
   };
 
@@ -323,7 +331,7 @@ export async function applyColorScheme(settings: ThemeSettings) {
       break;
 
     default:
-      unreachableCase(scheme);
+      throw new Error(scheme);
   }
 }
 

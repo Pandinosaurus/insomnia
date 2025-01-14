@@ -1,6 +1,6 @@
-import { GrpcRequest, isGrpcRequest } from '../models/grpc-request';
-import { isRequest, Request } from '../models/request';
-import { isRequestGroup, RequestGroup } from '../models/request-group';
+import { type GrpcRequest, isGrpcRequest } from '../models/grpc-request';
+import { isRequest, type Request } from '../models/request';
+import { isRequestGroup, type RequestGroup } from '../models/request-group';
 import {
   HTTP_METHODS,
   SORT_CREATED_ASC,
@@ -12,6 +12,7 @@ import {
   SORT_NAME_DESC,
   SORT_TYPE_ASC,
   SORT_TYPE_DESC,
+  SORT_TYPE_MANUAL,
 } from './constants';
 
 type SortableModel = Request | RequestGroup | GrpcRequest;
@@ -134,4 +135,5 @@ export const sortMethodMap = {
   [SORT_HTTP_METHOD]: httpMethodSort,
   [SORT_TYPE_DESC]: descendingTypeSort,
   [SORT_TYPE_ASC]: ascendingTypeSort,
+  [SORT_TYPE_MANUAL]: metaSortKeySort,
 };

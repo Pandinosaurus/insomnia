@@ -1,10 +1,11 @@
 import { format } from 'date-fns';
-import { SaveDialogOptions } from 'electron';
+import type { SaveDialogOptions } from 'electron';
 import fs from 'fs';
 import { extension as mimeExtension } from 'mime-types';
 import multiparty from 'multiparty';
 import path from 'path';
-import React, { FC, useCallback, useEffect, useState } from 'react';
+import React, { type FC, useCallback, useEffect, useState } from 'react';
+import { Button } from 'react-aria-components';
 import { PassThrough } from 'stream';
 
 import {
@@ -12,9 +13,7 @@ import {
   PREVIEW_MODE_FRIENDLY,
 } from '../../../common/constants';
 import type { ResponseHeader } from '../../../models/response';
-import { Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
+import { Dropdown, DropdownItem, ItemContent } from '../base/dropdown';
 import { showModal } from '../modals/index';
 import { WrapperModal } from '../modals/wrapper-modal';
 import { ResponseHeadersViewer } from './response-headers-viewer';
@@ -115,7 +114,7 @@ export const ResponseMultipartViewer: FC<Props> = ({
     };
     const { canceled, filePath } = await window.dialog.showSaveDialog(options);
 
-    if (canceled) {
+    if (canceled || !filePath) {
       return;
     }
 
@@ -124,7 +123,6 @@ export const ResponseMultipartViewer: FC<Props> = ({
 
     // Save the file
     try {
-      // @ts-expect-error -- TSCONVERSION if filePath is undefined, don't try to write anything
       await fs.promises.writeFile(filePath, selectedPart.value);
     } catch (err) {
       console.warn('Failed to save multipart to file', err);
@@ -163,35 +161,57 @@ export const ResponseMultipartViewer: FC<Props> = ({
         }}
       >
         <div>
-          <Dropdown wide>
-            <DropdownButton className="btn btn--clicky">
-              <div
-                style={{
-                  minWidth: '200px',
-                  display: 'inline-block',
-                }}
-              >
-                {selectedPart.title}
-              </div>
-              <i className="fa fa-caret-down fa--skinny space-left" />
-            </DropdownButton>
+          <Dropdown
+            aria-label='Select Part Dropdown'
+            triggerButton={
+              <Button className="border border-solid border-[--hl-lg] px-[--padding-md] h-[--line-height-xs] rounded-[--radius-md] hover:bg-[--hl-xs]">
+                <div
+                  style={{
+                    minWidth: '200px',
+                    display: 'inline-block',
+                  }}
+                >
+                  {selectedPart.title}
+                </div>
+                <i className="fa fa-caret-down fa--skinny space-left" />
+              </Button>
+            }
+          >
             {parts.map(part => (
-              <DropdownItem key={part.id} value={part} onClick={selectPart}>
-                {selectedPart?.id === part.id ? <i className="fa fa-check" /> : <i className="fa fa-empty" />}
-                {part.title}
+              <DropdownItem
+                aria-label={part.title}
+                key={part.id}
+              >
+                <ItemContent
+                  icon={selectedPart?.id === part.id ? 'check' : 'empty'}
+                  label={part.title}
+                  onClick={() => selectPart(part)}
+                />
               </DropdownItem>
             ))}
           </Dropdown>
         </div>
-        <Dropdown right>
-          <DropdownButton className="btn btn--clicky">
-            <i className="fa fa-bars" />
-          </DropdownButton>
-          <DropdownItem onClick={viewHeaders}>
-            <i className="fa fa-list" /> View Headers
+        <Dropdown
+          aria-label='Part Actions Dropdown'
+          triggerButton={
+            <Button className="border border-solid border-[--hl-lg] px-[--padding-md] h-[--line-height-xs] rounded-[--radius-md] hover:bg-[--hl-xs]">
+              <i className="fa fa-bars" />
+            </Button>
+          }
+        >
+          <DropdownItem aria-label='View Headers'>
+            <ItemContent
+              icon="list"
+              label="View Headers"
+              onClick={viewHeaders}
+            />
           </DropdownItem>
-          <DropdownItem onClick={saveAsFile}>
-            <i className="fa fa-save" /> Save as File
+          <DropdownItem aria-label='Save as File'>
+            <ItemContent
+              icon="save"
+              label="Save as File"
+              onClick={saveAsFile}
+            />
           </DropdownItem>
         </Dropdown>
       </div>

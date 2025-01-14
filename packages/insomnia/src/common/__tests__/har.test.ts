@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from '@jest/globals';
 import path from 'path';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { globalBeforeEach } from '../../__jest__/before-each';
+import { database as db } from '../../common/database';
 import * as models from '../../models';
 import { Cookie } from '../../models/cookie-jar';
 import { Request } from '../../models/request';
@@ -12,8 +12,9 @@ import { getRenderedRequestAndContext } from '../render';
 
 describe('export', () => {
   beforeEach(async () => {
-    await globalBeforeEach();
+    await db.init(models.types(), { inMemoryOnly: true }, true, () => { },);
     await models.project.all();
+    await models.settings.getOrCreate();
   });
 
   describe('exportHar()', () => {
@@ -99,7 +100,6 @@ describe('export', () => {
                 queryString: [],
                 postData: {
                   mimeType: 'application/json',
-                  params: [],
                   text: '{}',
                 },
                 headersSize: -1,
@@ -471,7 +471,6 @@ describe('export', () => {
         method: 'POST',
         postData: {
           mimeType: '',
-          params: [],
           text: 'foo bar',
         },
         queryString: [
@@ -481,7 +480,6 @@ describe('export', () => {
           },
         ],
         url: 'http://google.com/',
-        settingEncodeUrl: true,
       });
     });
 
@@ -556,11 +554,9 @@ describe('export', () => {
               fileName: '/tmp/my_file_2',
             },
           ],
-          text: '',
         },
         queryString: [],
         url: 'http://example.com/post',
-        settingEncodeUrl: true,
       });
     });
   });

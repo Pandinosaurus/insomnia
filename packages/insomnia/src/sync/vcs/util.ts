@@ -2,11 +2,12 @@ import clone from 'clone';
 import crypto from 'crypto';
 
 import { strings } from '../../common/strings';
-import { BaseModel } from '../../models';
+import type { BaseModel } from '../../models';
 import { deleteKeys, resetKeys, shouldIgnoreKey } from '../ignore-keys';
 import { deterministicStringify } from '../lib/deterministicStringify';
 import type {
   Branch,
+  Compare,
   DocumentKey,
   MergeConflict,
   Snapshot,
@@ -241,10 +242,7 @@ export function threeWayMerge(
 export function compareBranches(
   a: Branch | null,
   b: Branch | null,
-): {
-  ahead: number;
-  behind: number;
-} {
+): Compare {
   const snapshotsA = a ? a.snapshots : [];
   const snapshotsB = b ? b.snapshots : [];
   const latestA = snapshotsA[snapshotsA.length - 1] || null;
@@ -537,12 +535,12 @@ export function describeChanges<T extends BaseModel>(a: T, b: T): string[] {
     const bStr = deterministicStringify(bValue);
 
     if (aValue === undefined && bValue !== undefined) {
-      changes.push(`+${key}`);
+      changes.push(`+${String(key)}`);
       continue;
     }
 
     if (aValue !== undefined && bValue === undefined) {
-      changes.push(`-${key}`);
+      changes.push(`-${String(key)}`);
       continue;
     }
 

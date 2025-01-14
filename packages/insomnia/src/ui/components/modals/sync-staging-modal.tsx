@@ -1,412 +1,343 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import React, { Fragment, PureComponent, ReactNode } from 'react';
-import { connect } from 'react-redux';
+import 'json-diff-kit/dist/viewer.css';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
-import { strings } from '../../../common/strings';
-import * as models from '../../../models';
-import { BaseModel } from '../../../models';
-import type { DocumentKey, Stage, StageEntry, Status } from '../../../sync/types';
-import { describeChanges } from '../../../sync/vcs/util';
-import { VCS } from '../../../sync/vcs/vcs';
-import { RootState } from '../../redux/modules';
-import { selectSyncItems } from '../../redux/selectors';
-import { IndeterminateCheckbox } from '../base/indeterminate-checkbox';
-import { type ModalHandle, Modal } from '../base/modal';
-import { ModalBody } from '../base/modal-body';
-import { ModalFooter } from '../base/modal-footer';
-import { ModalHeader } from '../base/modal-header';
-import { Tooltip } from '../tooltip';
+import { Differ, Viewer } from 'json-diff-kit';
+import React, { useEffect, useState } from 'react';
+import { Button, Dialog, GridList, GridListItem, Heading, Label, Modal, ModalOverlay, TextArea, TextField, Tooltip, TooltipTrigger } from 'react-aria-components';
+import { useFetcher, useParams } from 'react-router-dom';
 
-type ReduxProps = ReturnType<typeof mapStateToProps>;
+import { all } from '../../../models';
+import type { StageEntry, Status, StatusCandidate } from '../../../sync/types';
+import { Icon } from '../icon';
 
-interface Props extends ReduxProps {
-  vcs: VCS;
-}
-
-type LookupMap = Record<string, {
-  entry: StageEntry;
-  changes: null | string[];
-  type: string;
-  checked: boolean;
-}>;
-
-interface State {
-  status: Status;
-  message: string;
-  error: string;
+interface Props {
   branch: string;
-  lookupMap: LookupMap;
+  status: Status;
+  syncItems: StatusCandidate[];
+  onClose: () => void;
 }
 
-const _initialState: State = {
-  status: {
-    stage: {},
-    unstaged: {},
-    key: '',
-  },
-  branch: '',
-  error: '',
-  message: '',
-  lookupMap: {},
-};
-
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class UnconnectedSyncStagingModal extends PureComponent<Props, State> {
-  modal: ModalHandle | null = null;
-  _onSnapshot: (() => void) | null = null;
-  _handlePush: (() => Promise<void>) | null = null;
-  textarea: HTMLTextAreaElement | null = null;
-  state = _initialState;
-
-  _setModalRef(modal: ModalHandle) {
-    this.modal = modal;
-  }
-
-  _setTextAreaRef(textarea: HTMLTextAreaElement) {
-    this.textarea = textarea;
-  }
-
-  _handleClearError() {
-    this.setState({ error: '' });
-  }
-
-  _handleMessageChange(event: React.ChangeEvent<HTMLTextAreaElement>) {
-    this.setState({ message: event.currentTarget.value });
-  }
-
-  async _handleStageToggle(event: React.SyntheticEvent<HTMLInputElement>) {
-    const { vcs } = this.props;
-    const { status } = this.state;
-    const id = event.currentTarget.name;
-    const isStaged = !!status.stage[id];
-    const newStage = isStaged
-      ? await vcs.unstage(status.stage, [status.stage[id]])
-      : await vcs.stage(status.stage, [status.unstaged[id]]);
-    await this.refreshMainAttributes({}, newStage);
-  }
-
-  async _handleAllToggle(keys: DocumentKey[], doStage: boolean) {
-    const { vcs } = this.props;
-    const { status } = this.state;
-    let stage;
-
-    if (doStage) {
-      const entries: StageEntry[] = [];
-
-      for (const k of Object.keys(status.unstaged)) {
-        if (keys.includes(k)) {
-          entries.push(status.unstaged[k]);
-        }
-      }
-
-      stage = await vcs.stage(status.stage, entries);
-    } else {
-      const entries: StageEntry[] = [];
-
-      for (const k of Object.keys(status.stage)) {
-        if (keys.includes(k)) {
-          entries.push(status.stage[k]);
-        }
-      }
-
-      stage = await vcs.unstage(status.stage, entries);
-    }
-
-    await this.refreshMainAttributes({}, stage);
-  }
-
-  async _handleTakeSnapshotAndPush() {
-    const success = await this._handleTakeSnapshot();
-
-    if (success) {
-      this._handlePush?.();
-    }
-  }
-
-  async _handleTakeSnapshot() {
-    const { vcs } = this.props;
-    const {
-      message,
-      status: { stage },
-    } = this.state;
-
-    try {
-      await vcs.takeSnapshot(stage, message);
-    } catch (err) {
-      this.setState({
-        error: err.message,
-      });
-      return false;
-    }
-
-    this._onSnapshot?.();
-    await this.refreshMainAttributes({
-      message: '',
-      error: '',
-    });
-    this.hide();
-    return true;
-  }
-
-  async refreshMainAttributes(newState: Partial<State> = {}, newStage: Stage = {}) {
-    const { vcs, syncItems } = this.props;
-    const branch = await vcs.getBranch();
-    const status = await vcs.status(syncItems, newStage);
-    const lookupMap: LookupMap = {};
-    const allKeys = [...Object.keys(status.stage), ...Object.keys(status.unstaged)];
-
-    for (const key of allKeys) {
-      const item = syncItems.find(si => si.key === key);
-      const oldDoc: BaseModel | null = await vcs.blobFromLastSnapshot(key);
-      const doc = (item && item.document) || oldDoc;
-      const entry = status.stage[key] || status.unstaged[key];
-
-      if (!entry || !doc) {
-        continue;
-      }
-
-      let changes: string[] | null = null;
-
-      if (item && item.document && oldDoc) {
-        changes = describeChanges(item.document, oldDoc);
-      }
-
-      lookupMap[key] = {
-        changes,
-        entry: entry,
-        type: models.getModelName(doc.type),
-        checked: !!status.stage[key],
-      };
-    }
-
-    // @ts-expect-error -- TSCONVERSION
-    this.setState({
-      status,
-      branch,
-      lookupMap,
-      error: '',
-      ...newState,
-    });
-  }
-
-  hide() {
-    this.modal?.hide();
-  }
-
-  async show(options: { onSnapshot?: () => any; handlePush: () => Promise<void> }) {
-    const { vcs, syncItems } = this.props;
-    this.modal?.show();
-    // @ts-expect-error -- TSCONVERSION
-    this._onSnapshot = options.onSnapshot;
-    this._handlePush = options.handlePush;
-    // Reset state
-    this.setState(_initialState);
-    // Add everything to stage by default except new items
-    const status: Status = await vcs.status(syncItems, {});
-    const toStage: StageEntry[] = [];
-
-    for (const key of Object.keys(status.unstaged)) {
-      // @ts-expect-error -- TSCONVERSION
-      if (status.unstaged[key].added) {
-        // Don't automatically stage added resources
-        continue;
-      }
-
-      toStage.push(status.unstaged[key]);
-    }
-
-    const stage = await vcs.stage(status.stage, toStage);
-    await this.refreshMainAttributes({}, stage);
-    this.textarea?.focus();
-  }
-
-  static renderOperation(entry: StageEntry, type: string, changes: string[]) {
-    let child: JSX.Element | null = null;
-    let message = '';
-
-    // @ts-expect-error -- TSCONVERSION type narrowing
-    if (entry.added) {
-      child = <i className="fa fa-plus-circle success" />;
-      message = 'Added';
-      // @ts-expect-error -- TSCONVERSION type narrowing
-    } else if (entry.modified) {
-      child = <i className="fa fa-circle faded" />;
-      message = `Modified (${changes.join(', ')})`;
-      // @ts-expect-error -- TSCONVERSION type narrowing
-    } else if (entry.deleted) {
-      child = <i className="fa fa-minus-circle danger" />;
-      message = 'Deleted';
-    } else {
-      child = <i className="fa fa-question-circle info" />;
-      message = 'Unknown';
-    }
-
-    if (type === models.workspace.type) {
-      type = strings.collection.singular;
-    }
-
-    return (
-      <Fragment>
-        <Tooltip message={message}>
-          {child} {type}
-        </Tooltip>
-      </Fragment>
-    );
-  }
-
-  renderTable(keys: DocumentKey[], title: ReactNode) {
-    const { status, lookupMap } = this.state;
-
-    if (keys.length === 0) {
-      return null;
-    }
-
-    let allUnChecked = true;
-    let allChecked = true;
-
-    for (const key of keys.sort()) {
-      if (!status.stage[key]) {
-        allChecked = false;
-      }
-
-      if (!status.unstaged[key]) {
-        allUnChecked = false;
-      }
-    }
-
-    const indeterminate = !allChecked && !allUnChecked;
-    return (
-      <div className="pad-top">
-        <strong>{title}</strong>
-        <table className="table--fancy table--outlined margin-top-sm">
-          <thead>
-            <tr>
-              <th>
-                <label className="wide no-pad">
-                  <span className="txt-md">
-                    <IndeterminateCheckbox
-                      className="space-right"
-                      checked={allChecked}
-                      onChange={() => this._handleAllToggle(keys, allUnChecked)}
-                      indeterminate={indeterminate}
-                    />
-                  </span>{' '}
-                  name
-                </label>
-              </th>
-              <th className="text-right ">Changes</th>
-              <th className="text-right">Description</th>
-            </tr>
-          </thead>
-          <tbody>
-            {keys.map(key => {
-              if (!lookupMap[key]) {
-                return null;
-              }
-
-              const { entry, type, checked, changes } = lookupMap[key];
-              return (
-                <tr key={key} className="table--no-outline-row">
-                  <td>
-                    <label className="no-pad wide">
-                      <input
-                        className="space-right"
-                        type="checkbox"
-                        checked={checked}
-                        name={key}
-                        onChange={this._handleStageToggle}
-                      />{' '}
-                      {entry.name}
-                    </label>
-                  </td>
-                  <td className="text-right">{changes ? changes.join(', ') : '--'}</td>
-                  <td className="text-right">
-                    {SyncStagingModal.renderOperation(entry, type, changes || [])}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    );
-  }
-
-  render() {
-    const { status, message, error, branch } = this.state;
-    const nonAddedKeys: string[] = [];
-    const addedKeys: string[] = [];
-    const allMap = { ...status.stage, ...status.unstaged };
-    const allKeys = Object.keys(allMap);
-
-    for (const key of allKeys) {
-      // @ts-expect-error -- TSCONVERSION
-      if (allMap[key].added) {
-        addedKeys.push(key);
-      } else {
-        nonAddedKeys.push(key);
-      }
-    }
-
-    return (
-      <Modal ref={this._setModalRef}>
-        <ModalHeader>Create Snapshot</ModalHeader>
-        <ModalBody className="wide pad">
-          {error && (
-            <p className="notice error margin-bottom-sm no-margin-top">
-              <button className="pull-right icon" onClick={this._handleClearError}>
-                <i className="fa fa-times" />
-              </button>
-              {error}
-            </p>
-          )}
-
-          <div className="form-group">
-            <div className="form-control form-control--outlined">
-              <label>
-                Snapshot Message
-                <textarea
-                  ref={this._setTextAreaRef}
-                  cols={30}
-                  rows={3}
-                  onChange={this._handleMessageChange}
-                  value={message}
-                  placeholder="This is a helpful message that describe the changes made in this snapshot"
-                  required
-                />
-              </label>
-            </div>
-          </div>
-
-          {this.renderTable(nonAddedKeys, 'Modified Objects')}
-          {this.renderTable(addedKeys, 'Unversioned Objects')}
-        </ModalBody>
-        <ModalFooter>
-          <div className="margin-left italic txt-sm">
-            <i className="fa fa-code-fork" /> {branch}
-          </div>
-          <div>
-            <button className="btn" onClick={this._handleTakeSnapshot}>
-              Create
-            </button>
-            <button className="btn" onClick={this._handleTakeSnapshotAndPush}>
-              Create and Push
-            </button>
-          </div>
-        </ModalFooter>
-      </Modal>
-    );
-  }
-}
-
-const mapStateToProps = (state: RootState) => ({
-  syncItems: selectSyncItems(state),
+const differ = new Differ({
+  detectCircular: true,
+  maxDepth: Infinity,
+  showModifications: true,
+  arrayDiffMethod: 'lcs',
 });
 
-export const SyncStagingModal = connect(
-  mapStateToProps,
-  null,
-  null,
-  { forwardRef: true },
-)(UnconnectedSyncStagingModal);
+function getDiff(previewDiffItem: StageEntry) {
+  let previousContent = null;
+  let content = null;
+
+  try {
+    previousContent = 'previousBlobContent' in previewDiffItem && previewDiffItem.previousBlobContent ? JSON.parse(previewDiffItem.previousBlobContent) : null;
+  } catch (err) {
+    console.error('Failed to parse previous blob content', err);
+  }
+
+  try {
+    content = 'blobContent' in previewDiffItem && previewDiffItem.blobContent ? JSON.parse(previewDiffItem.blobContent) : null;
+  } catch (err) {
+    console.error('Failed to parse blob content', err);
+  }
+
+  return differ.diff(previousContent, content);
+}
+
+function getModelTypeById(id: string) {
+  const idPrefix = id.split('_')[0];
+  const model = all().find(model => model.prefix === idPrefix);
+
+  return model?.name || 'Unknown';
+}
+
+export const SyncStagingModal = ({ onClose, status, syncItems }: Props) => {
+  const { projectId, workspaceId, organizationId } = useParams() as {
+    projectId: string;
+    workspaceId: string;
+    organizationId: string;
+  };
+
+  const stagedChanges = Object.entries(status.stage).map(([key, entry]) => ({
+    ...entry,
+    document: syncItems.find(item => item.key === key)?.document || 'deleted' in entry ? { type: getModelTypeById(key) } : undefined,
+    id: `staged-${key}`,
+  }));;
+  const unstagedChanges = Object.entries(status.unstaged).map(([key, entry]) => ({
+    ...entry,
+    document: syncItems.find(item => item.key === key)?.document || 'deleted' in entry ? { type: getModelTypeById(key) } : undefined,
+    id: `unstaged-${key}`,
+  }));;
+
+  const stageChangesFetcher = useFetcher();
+
+  const stageChanges = (keys: string[]) => {
+    stageChangesFetcher.submit({
+      keys,
+    }, {
+      action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/stage`,
+      method: 'POST',
+      encType: 'application/json',
+    });
+  };
+
+  const unstageChanges = (keys: string[]) => {
+    stageChangesFetcher.submit({
+      keys,
+    }, {
+      action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/unstage`,
+      method: 'POST',
+      encType: 'application/json',
+    });
+  };
+
+  const allChanges = [...stagedChanges, ...unstagedChanges];
+  const allChangesLength = allChanges.length;
+  const { Form, formAction, state, data } = useFetcher();
+  const error = data?.error;
+
+  const isPushing = state !== 'idle' && formAction?.endsWith('create-snapshot-and-push');
+  const isCreatingSnapshot = state !== 'idle' && formAction?.endsWith('create-snapshot');
+
+  useEffect(() => {
+    if (allChangesLength === 0 && !error) {
+      onClose();
+    }
+  }, [allChangesLength, onClose, error]);
+
+  const [selectedItemId, setSelectedItemId] = useState<string>('');
+
+  const previewDiffItem = allChanges.find(item => item.id === selectedItemId);
+
+  return (
+    <ModalOverlay
+      isOpen
+      onOpenChange={isOpen => {
+        !isOpen && onClose();
+      }}
+      isDismissable
+      className="w-full h-[--visual-viewport-height] fixed z-10 top-0 left-0 flex items-center justify-center bg-black/30"
+    >
+      <Modal
+        onOpenChange={isOpen => {
+          !isOpen && onClose();
+        }}
+        className="flex flex-col w-[calc(100%-var(--padding-xl))] h-[calc(100%-var(--padding-xl))] rounded-md border border-solid border-[--hl-sm] p-[--padding-lg] bg-[--color-bg] text-[--color-font]"
+      >
+        <Dialog
+          className="outline-none flex-1 h-full flex flex-col overflow-hidden"
+        >
+          {({ close }) => (
+            <div className='flex-1 flex flex-col gap-4 overflow-hidden'>
+              <div className='flex-shrink-0 flex gap-2 items-center justify-between'>
+                <Heading slot="title" className='text-2xl'>Commit changes</Heading>
+                <Button
+                  className="flex flex-shrink-0 items-center justify-center aspect-square h-6 aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                  onPress={close}
+                >
+                  <Icon icon="x" />
+                </Button>
+              </div>
+              <div className='grid [grid-template-columns:300px_1fr] h-full overflow-hidden divide-x divide-solid divide-[--hl-md] gap-2'>
+                <div className='flex-1 flex flex-col gap-4 overflow-hidden'>
+                  <Form method="POST" className='flex flex-col gap-2'>
+                    <TextField className="flex flex-col gap-2 flex-shrink-0">
+                      <Label className='font-bold'>
+                        Message
+                      </Label>
+                      <TextArea
+                        rows={3}
+                        name="message"
+                        className="border border-solid border-[--hl-sm] placeholder:text-[--hl-md] rounded-sm p-2 resize-none"
+                        placeholder="This is a helpful message that describes the changes made in this commit."
+                        required
+                      />
+                    </TextField>
+
+                    <div className="flex flex-shrink-0 justify-stretch gap-2 items-center">
+                      <Button
+                        type='submit'
+                        isDisabled={state !== 'idle'}
+                        formAction={`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/branch/create-snapshot`}
+                        className="flex-1 flex h-8 items-center justify-center px-4 gap-2 bg-[--hl-xxs] aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                      >
+                        <Icon icon={isCreatingSnapshot ? 'spinner' : 'check'} className={`w-5 ${isCreatingSnapshot ? 'animate-spin' : ''}`} /> Commit
+                      </Button>
+                      <Button
+                        type="submit"
+                        isDisabled={state !== 'idle'}
+                        formAction={`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/branch/create-snapshot-and-push`}
+                        className="flex-1 flex h-8 items-center justify-center px-4 gap-2 bg-[--hl-xxs] aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+                      >
+                        <Icon icon={isPushing ? 'spinner' : 'cloud-arrow-up'} className={`w-5 ${isPushing ? 'animate-spin' : ''}`} /> Commit and push
+                      </Button>
+                    </div>
+                    {data?.error && (
+                      <p className="bg-opacity-20 text-sm text-[--color-font-danger] p-2 rounded-sm bg-[rgba(var(--color-danger-rgb),var(--tw-bg-opacity))]">
+                        <Icon icon="exclamation-triangle" /> {data.error}
+                      </p>
+                    )}
+                  </Form>
+
+                  <div className='grid auto-rows-auto gap-2 overflow-y-auto'>
+                    <div className='flex flex-col gap-2 overflow-hidden max-h-96 w-full'>
+                      <Heading className='group font-semibold flex-shrink-0 w-full flex items-center gap-2 py-1 justify-between'>
+                        <span className='flex-1'>Staged changes</span>
+                        <Button
+                          className='opacity-0 items-center hover:opacity-100 focus:opacity-100 data-[pressed]:opacity-100 flex group-focus-within:opacity-100 group-focus:opacity-100 group-hover:opacity-100 justify-center h-6 aspect-square aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm'
+                          slot={null}
+                          onPress={() => {
+                            unstageChanges(stagedChanges.map(item => item.key));
+                          }}
+                        >
+                          <Icon icon="minus" />
+                        </Button>
+                        <span className='text-xs rounded-full px-1 text-[--hl] bg-[--hl-sm]'>{stagedChanges.length}</span>
+                      </Heading>
+                      <div className='flex-1 flex overflow-y-auto w-full select-none'>
+                        <GridList
+                          className="w-full"
+                          items={stagedChanges.map(entry => ({
+                            entry,
+                            id: entry.id,
+                            key: entry.id,
+                            textValue: entry.name || entry.document?.type || '',
+                          }))}
+                          aria-label='Unstaged changes'
+                          onAction={key => {
+                            setSelectedItemId(key.toString());
+                          }}
+                          renderEmptyState={() => (
+                            <p className='p-2 text-[--hl] text-sm'>
+                              Stage your changes to commit them.
+                            </p>
+                          )}
+                        >
+                          {item => {
+                            return (
+                              <GridListItem className="group outline-none select-none aria-selected:bg-[--hl-sm] aria-selected:text-[--color-font] hover:bg-[--hl-xs] focus:bg-[--hl-sm] overflow-hidden text-[--hl] transition-colors w-full flex items-center px-2 py-1 justify-between">
+                                <span className='truncate'>{item.entry.name || item.entry.document?.type}</span>
+                                <div className='flex items-center gap-1'>
+                                  <Button
+                                    className='opacity-0 items-center hover:opacity-100 focus:opacity-100 data-[pressed]:opacity-100 flex group-focus-within:opacity-100 group-focus:opacity-100 group-hover:opacity-100 justify-center h-6 aspect-square aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm'
+                                    slot={null}
+                                    onPress={() => {
+                                      unstageChanges([item.entry.key]);
+                                    }}
+                                  >
+                                    <Icon icon="minus" />
+                                  </Button>
+                                  <TooltipTrigger>
+                                    <Button className="cursor-default">
+                                      {'added' in item.entry ? 'U' : 'deleted' in item.entry ? 'D' : 'M'}
+                                    </Button>
+                                    <Tooltip
+                                      offset={8}
+                                      className="border select-none text-sm max-w-xs border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+                                    >
+                                      {'added' in item.entry ? 'Untracked' : 'deleted' in item.entry ? 'Deleted' : 'Modified'}
+                                    </Tooltip>
+                                  </TooltipTrigger>
+                                </div>
+                              </GridListItem>
+                            );
+                          }}
+                        </GridList>
+                      </div>
+                    </div>
+                    <div className='flex flex-col gap-2 overflow-hidden max-h-96 w-full'>
+                      <Heading className='group font-semibold flex-shrink-0 w-full flex items-center py-1 justify-between'>
+                        <span>Changes</span>
+                        <div className='flex items-center gap-2'>
+                          <Button
+                            className='opacity-0 items-center hover:opacity-100 focus:opacity-100 data-[pressed]:opacity-100 flex group-focus-within:opacity-100 group-focus:opacity-100 group-hover:opacity-100 justify-center h-6 aspect-square aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm'
+                            slot={null}
+                            onPress={() => {
+                              stageChanges(unstagedChanges.map(item => item.key));
+                            }}
+                          >
+                            <Icon icon="plus" />
+                          </Button>
+                          <span className='text-xs rounded-full px-1 text-[--hl] bg-[--hl-sm]'>{unstagedChanges.length}</span>
+                        </div>
+                      </Heading>
+                      <div className='flex-1 flex overflow-y-auto w-full select-none'>
+                        <GridList
+                          className="w-full"
+                          items={unstagedChanges.map(entry => ({
+                            entry,
+                            id: entry.id,
+                            key: entry.id,
+                            textValue: entry.name || entry.document?.type || '',
+                          }))}
+                          aria-label='Unstaged changes'
+                          onAction={key => {
+                            setSelectedItemId(key.toString());
+                          }}
+                        >
+                          {item => {
+                            return (
+                              <GridListItem className="group outline-none select-none aria-selected:bg-[--hl-sm] aria-selected:text-[--color-font] hover:bg-[--hl-xs] focus:bg-[--hl-sm] overflow-hidden text-[--hl] transition-colors w-full flex items-center px-2 py-1 justify-between">
+                                <span className='truncate'>{item.entry.name || item.entry.document?.type}</span>
+                                <div className='flex items-center gap-1'>
+                                  <Button
+                                    className='opacity-0 items-center hover:opacity-100 focus:opacity-100 data-[pressed]:opacity-100 flex group-focus-within:opacity-100 group-focus:opacity-100 group-hover:opacity-100 justify-center h-6 aspect-square aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm'
+                                    slot={null}
+                                    onPress={() => {
+                                      stageChanges([item.entry.key]);
+                                    }}
+                                  >
+                                    <Icon icon="plus" />
+                                  </Button>
+                                  <TooltipTrigger>
+                                    <Button className="cursor-default">
+                                      {'added' in item.entry ? 'U' : 'deleted' in item.entry ? 'D' : 'M'}
+                                    </Button>
+                                    <Tooltip
+                                      offset={8}
+                                      className="border select-none text-sm max-w-xs border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+                                    >
+                                      {'added' in item.entry ? 'Untracked' : 'deleted' in item.entry ? 'Deleted' : 'Modified'}
+                                    </Tooltip>
+                                  </TooltipTrigger>
+                                </div>
+                              </GridListItem>
+                            );
+                          }}
+                        </GridList>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                {previewDiffItem ? <div className='p-2 pb-0 flex flex-col gap-2 h-full overflow-y-auto'>
+                  <Heading className='font-bold flex items-center gap-2'>
+                    <Icon icon="code-compare" />
+                    {previewDiffItem.name || ('document' in previewDiffItem && previewDiffItem.document && 'type' in previewDiffItem.document ? previewDiffItem.document?.type : '')}
+                  </Heading>
+                  {previewDiffItem && (
+                    <div
+                      className='bg-[--hl-xs] rounded-sm p-2 flex-1 overflow-y-auto text-[--color-font]'
+                    >
+                      <Viewer
+                        diff={getDiff(previewDiffItem)}
+                        hideUnchangedLines
+                        highlightInlineDiff
+                        className='diff-viewer'
+                      />
+                    </div>
+                  )}
+                </div> : <div className='p-2 h-full flex flex-col gap-4 items-center justify-center'>
+                  <Heading className='font-semibold flex justify-center items-center gap-2 text-4xl text-[--hl-md]'>
+                    <Icon icon="code-compare" />
+                    Diff view
+                  </Heading>
+                  <p className='text-[--hl]'>
+                    Select an item to compare
+                  </p>
+                </div>}
+              </div>
+            </div>
+          )}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
+  );
+};

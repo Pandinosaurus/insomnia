@@ -1,3 +1,5 @@
+import type { TestResults } from 'insomnia-testing';
+
 import { database as db } from '../common/database';
 import type { BaseModel } from './index';
 
@@ -12,7 +14,7 @@ export const canDuplicate = false;
 export const canSync = false;
 
 export interface BaseUnitTestResult {
-  results: Record<string, any>;
+  results: TestResults;
 }
 
 export type UnitTestResult = BaseModel & BaseUnitTestResult;
@@ -44,7 +46,17 @@ export function update(unitTest: UnitTestResult, patch: Partial<UnitTestResult>)
 }
 
 export function getByParentId(parentId: string) {
-  return db.getWhere(type, { parentId });
+  return db.getWhere<UnitTestResult>(type, { parentId });
+}
+
+export function getLatestByParentId(parentId: string) {
+  return db.getMostRecentlyModified<UnitTestResult>(type, { parentId });
+}
+
+export function getById(_id: string) {
+  return db.getWhere<UnitTestResult>(type, {
+    _id,
+  });
 }
 
 export function all() {

@@ -1,15 +1,13 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it, vi } from 'vitest';
 
-import { globalBeforeEach } from '../../__jest__/before-each';
 import { CONTENT_TYPE_GRAPHQL } from '../../common/constants';
+import { newBodyGraphQL, updateMimeType } from '../../ui/components/dropdowns/content-type-dropdown';
 import * as models from '../index';
-import { newBodyGraphQL } from '../request';
 
 describe('init()', () => {
-  beforeEach(globalBeforeEach);
 
   it('contains all required fields', async () => {
-    Date.now = jest.fn().mockReturnValue(1478795580200);
+    Date.now = vi.fn().mockReturnValue(1478795580200);
     expect(models.request.init()).toEqual({
       isPrivate: false,
       authentication: {},
@@ -20,6 +18,9 @@ describe('init()', () => {
       name: 'New Request',
       description: '',
       parameters: [],
+      pathParameters: undefined,
+      preRequestScript: undefined,
+      afterResponseScript: undefined,
       url: '',
       settingStoreCookies: true,
       settingSendCookies: true,
@@ -32,10 +33,9 @@ describe('init()', () => {
 });
 
 describe('create()', () => {
-  beforeEach(globalBeforeEach);
 
   it('creates a valid request', async () => {
-    Date.now = jest.fn().mockReturnValue(1478795580200);
+    Date.now = vi.fn().mockReturnValue(1478795580200);
     const request = await models.request.create({
       name: 'Test Request',
       parentId: 'fld_124',
@@ -56,6 +56,9 @@ describe('create()', () => {
       method: 'GET',
       name: 'Test Request',
       parameters: [],
+      pathParameters: undefined,
+      preRequestScript: undefined,
+      afterResponseScript: undefined,
       url: '',
       settingStoreCookies: true,
       settingSendCookies: true,
@@ -69,7 +72,7 @@ describe('create()', () => {
   });
 
   it('fails when missing parentId', async () => {
-    Date.now = jest.fn().mockReturnValue(1478795580200);
+    Date.now = vi.fn().mockReturnValue(1478795580200);
     expect(() =>
       models.request.create({
         name: 'Test Request',
@@ -79,7 +82,6 @@ describe('create()', () => {
 });
 
 describe('updateMimeType()', () => {
-  beforeEach(globalBeforeEach);
 
   it('adds header when does not exist', async () => {
     const request = await models.request.create({
@@ -87,7 +89,7 @@ describe('updateMimeType()', () => {
       parentId: 'fld_1',
     });
     expect(request).not.toBeNull();
-    const newRequest = await models.request.updateMimeType(request, 'text/html');
+    const newRequest = await updateMimeType(request, 'text/html');
     expect(newRequest.headers).toEqual([
       {
         name: 'Content-Type',
@@ -116,10 +118,10 @@ describe('updateMimeType()', () => {
       ],
     });
     expect(request).not.toBeNull();
-    const newRequest = await models.request.updateMimeType(request, 'text/html');
+    const newRequest = await updateMimeType(request, 'text/html');
     expect(newRequest.headers).toEqual([
       {
-        name: 'content-tYPE',
+        name: 'Content-Type',
         value: 'text/html',
       },
       {
@@ -133,7 +135,7 @@ describe('updateMimeType()', () => {
     ]);
   });
 
-  it('replaces header when exists', async () => {
+  it('replaces header when exists2', async () => {
     const request = await models.request.create({
       name: 'My Request',
       parentId: 'fld_1',
@@ -145,10 +147,10 @@ describe('updateMimeType()', () => {
       ],
     });
     expect(request).not.toBeNull();
-    const newRequest = await models.request.updateMimeType(request, 'text/html');
+    const newRequest = await updateMimeType(request, 'text/html');
     expect(newRequest.headers).toEqual([
       {
-        name: 'content-tYPE',
+        name: 'Content-Type',
         value: 'text/html',
       },
     ]);
@@ -166,42 +168,13 @@ describe('updateMimeType()', () => {
       ],
     });
     expect(request).not.toBeNull();
-    const newRequest = await models.request.updateMimeType(request, null);
+    const newRequest = await updateMimeType(request, null);
     expect(newRequest.body).toEqual({});
     expect(newRequest.headers).toEqual([]);
-  });
-
-  it('uses saved body when provided', async () => {
-    const request = await models.request.create({
-      name: 'My Request',
-      parentId: 'fld_1',
-      body: {
-        text: 'My Data',
-      },
-    });
-    expect(request).not.toBeNull();
-    const newRequest = await models.request.updateMimeType(request, 'application/json', false, {
-      text: 'Saved Data',
-    });
-    expect(newRequest.body.text).toEqual('Saved Data');
-  });
-
-  it('uses existing body when saved body not provided', async () => {
-    const request = await models.request.create({
-      name: 'My Request',
-      parentId: 'fld_1',
-      body: {
-        text: 'My Data',
-      },
-    });
-    expect(request).not.toBeNull();
-    const newRequest = await models.request.updateMimeType(request, 'application/json', false, {});
-    expect(newRequest.body.text).toEqual('My Data');
   });
 });
 
 describe('migrate()', () => {
-  beforeEach(globalBeforeEach);
 
   it('migrates basic case', () => {
     const original = {
@@ -396,7 +369,7 @@ describe('migrate()', () => {
   });
 
   it('migrates from initModel()', async () => {
-    Date.now = jest.fn().mockReturnValue(1478795580200);
+    Date.now = vi.fn().mockReturnValue(1478795580200);
     const original = {
       _id: 'req_123',
       headers: [],
@@ -416,6 +389,9 @@ describe('migrate()', () => {
       headers: [],
       authentication: {},
       parameters: [],
+      pathParameters: undefined,
+      preRequestScript: undefined,
+      afterResponseScript: undefined,
       parentId: null,
       body: {
         mimeType: '',

@@ -1,31 +1,24 @@
 import classnames from 'classnames';
-import React, { FC } from 'react';
-import { useSelector } from 'react-redux';
+import React, { type FC, type PropsWithChildren } from 'react';
+import { useRouteLoaderData } from 'react-router-dom';
 
-import * as models from '../../../../../models';
-import { isRequest } from '../../../../../models/request';
-import { RequestAccordionKeys } from '../../../../../models/request-meta';
-import { selectActiveRequest, selectActiveRequestMeta } from '../../../../redux/selectors';
+import type { RequestAccordionKeys } from '../../../../../models/request-meta';
+import { useRequestMetaPatcher } from '../../../../hooks/use-request';
+import type { RequestLoaderData } from '../../../../routes/request';
 
 interface Props {
   label: string;
   accordionKey: RequestAccordionKeys;
 }
 
-export const AuthAccordion: FC<Props> = ({ accordionKey, label, children }) => {
-  const activeRequest = useSelector(selectActiveRequest);
-  const activeRequestMeta = useSelector(selectActiveRequestMeta);
-
-  if (!activeRequest || !isRequest(activeRequest)) {
-    return null;
-  }
-
-  const expanded = Boolean(activeRequestMeta?.expandedAccordionKeys[accordionKey]);
-
-  const toggle = async () => {
-    await models.requestMeta.updateOrCreateByParentId(activeRequest._id, {
+export const AuthAccordion: FC<PropsWithChildren<Props>> = ({ accordionKey, label, children }) => {
+  const reqData = useRouteLoaderData('request/:requestId') as RequestLoaderData;
+  const expanded = !reqData || Boolean(reqData.activeRequestMeta?.expandedAccordionKeys[accordionKey]);
+  const patchRequestMeta = useRequestMetaPatcher();
+  const toggle = () => {
+    reqData && patchRequestMeta(reqData.activeRequest._id, {
       expandedAccordionKeys: {
-        ...activeRequestMeta?.expandedAccordionKeys,
+        ...reqData.activeRequestMeta?.expandedAccordionKeys,
         [accordionKey]: !expanded,
       },
     });

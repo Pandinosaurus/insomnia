@@ -1,52 +1,47 @@
-import fs from 'fs';
-import { convert, ConvertResultType } from 'insomnia-importers';
+import { readFile } from 'fs/promises';
 
-import type { ApiSpec } from '../models/api-spec';
-import type { BaseModel } from '../models/index';
+import { type ApiSpec, isApiSpec } from '../models/api-spec';
+import { type CookieJar, isCookieJar } from '../models/cookie-jar';
+import { type BaseEnvironment, type Environment, isEnvironment } from '../models/environment';
+import { type GrpcRequest, isGrpcRequest } from '../models/grpc-request';
+import { type BaseModel, getModel, userSession } from '../models/index';
 import * as models from '../models/index';
-import { isRequest } from '../models/request';
-import { isWorkspace, Workspace } from '../models/workspace';
-import { AlertModal } from '../ui/components/modals/alert-modal';
-import { showError, showModal } from '../ui/components/modals/index';
-import { ImportToWorkspacePrompt, SetWorkspaceScopePrompt } from '../ui/redux/modules/helpers';
-import { SegmentEvent, trackSegmentEvent } from './analytics';
+import { isMockRoute, type MockRoute } from '../models/mock-route';
+import { isRequest, type Request } from '../models/request';
+import { isRequestGroup } from '../models/request-group';
+import { isUnitTest, type UnitTest } from '../models/unit-test';
+import { isUnitTestSuite, type UnitTestSuite } from '../models/unit-test-suite';
 import {
-  BASE_ENVIRONMENT_ID_KEY,
-  CONTENT_TYPE_GRAPHQL,
-  EXPORT_TYPE_WORKSPACE,
-  WORKSPACE_ID_KEY,
-} from './constants';
+  isWebSocketRequest,
+  type WebSocketRequest,
+} from '../models/websocket-request';
+import { isWorkspace, type Workspace } from '../models/workspace';
+import type { CurrentPlan } from '../ui/routes/organization';
+import { convert, type InsomniaImporter } from '../utils/importers/convert';
+import { id as postmanEnvImporterId } from '../utils/importers/importers/postman-env';
+import { invariant } from '../utils/invariant';
 import { database as db } from './database';
-import { diffPatchObj, fnOrString, generateId } from './misc';
-import { strings } from './strings';
+import { generateId } from './misc';
 
-export interface ImportResult {
-  source: string;
-  error: Error | null;
-  summary: Record<string, BaseModel[]>;
+export interface ExportedModel extends BaseModel {
+  _type: string;
 }
 
 interface ConvertResult {
-  type: ConvertResultType;
+  type: InsomniaImporter;
   data: {
-    resources: Record<string, any>[];
+    resources: ExportedModel[];
   };
 }
 
-export interface ImportRawConfig {
-  getWorkspaceId: ImportToWorkspacePrompt;
-  getProjectId?: () => Promise<string>;
-  getWorkspaceScope?: SetWorkspaceScopePrompt;
-  enableDiffBasedPatching?: boolean;
-  enableDiffDeep?: boolean;
-  bypassDiffProps?: {
-    url: boolean;
-  };
-}
+const isSubEnvironmentResource = (environment: Environment) => {
+  return !environment.parentId || environment.parentId.startsWith(models.environment.prefix) || environment.parentId.startsWith('__BASE_ENVIRONMENT_ID__');
+};
 
-export async function importUri(uri: string, importConfig: ImportRawConfig) {
-  let rawText;
-  // If GH preview, force raw
+export const isInsomniaV4Import = ({ id }: Pick<InsomniaImporter, 'id'>) =>
+  id === 'insomnia-4';
+
+export async function fetchImportContentFromURI({ uri }: { uri: string }) {
   const url = new URL(uri);
 
   if (url.origin === 'https://github.com') {
@@ -56,315 +51,416 @@ export async function importUri(uri: string, importConfig: ImportRawConfig) {
   }
 
   if (uri.match(/^(http|https):\/\//)) {
-    const response = await window.fetch(uri);
-    rawText = await response.text();
+    const response = await fetch(uri);
+    const content = await response.text();
+
+    return content;
   } else if (uri.match(/^(file):\/\//)) {
     const path = uri.replace(/^(file):\/\//, '');
-    rawText = fs.readFileSync(path, 'utf8');
+    const content = await readFile(path, 'utf8');
+
+    return content;
   } else {
     // Treat everything else as raw text
-    rawText = decodeURIComponent(uri);
+    const content = decodeURIComponent(uri);
+
+    return content;
   }
-
-  const result = await importRaw(rawText, importConfig);
-  const { summary, error } = result;
-
-  if (error) {
-    showError({
-      title: 'Failed to import',
-      error,
-      message: 'Import failed',
-    });
-    return result;
-  }
-
-  const statements = Object.keys(summary)
-    .map(type => {
-      const count = summary[type].length;
-      const name = models.getModelName(type, count);
-      return count === 0 ? null : `${count} ${name}`;
-    })
-    .filter(s => s !== null);
-  let message;
-
-  if (statements.length === 0) {
-    message = 'Nothing was found to import.';
-  } else {
-    message = `You imported ${statements.join(', ')}!`;
-  }
-
-  showModal(AlertModal, {
-    title: 'Import Succeeded',
-    message,
-  });
-  return result;
 }
 
-// If we come across an ID of this form, we will replace it with a new one
-const REPLACE_ID_REGEX = /__\w+_\d+__/g;
+export interface ImportFileDetail {
+  contentStr: string;
+  oriFileName: string;
+}
 
-export async function importRaw(
-  rawContent: string,
-  {
-    getWorkspaceId,
-    getWorkspaceScope,
-    getProjectId,
-    enableDiffBasedPatching,
-    enableDiffDeep,
-    bypassDiffProps,
-  }: ImportRawConfig,
-) {
-  let results: ConvertResult;
+export interface PostmanDataDumpRawData {
+  collectionList: ImportFileDetail[];
+  envList: ImportFileDetail[];
+}
 
+export async function getFilesFromPostmanExportedDataDump(filePath: string): Promise<PostmanDataDumpRawData> {
+  let res;
   try {
-    results = (await convert(rawContent)) as unknown as ConvertResult;
+    res = await window.main.extractJsonFileFromPostmanDataDumpArchive(filePath);
   } catch (err) {
-    const importResult: ImportResult = {
-      source: 'not found',
-      error: err,
-      summary: {},
-    };
-    return importResult;
+    throw new Error('Extract failed');
   }
+  if (res && res.data) {
+    return res.data;
+  } else if (res?.err) {
+    throw new Error(res.err);
+  } else {
+    throw new Error('Extract failed');
+  }
+}
 
-  const { data, type: resultsType } = results;
-  // Generate all the ids we may need
-  const generatedIds: Record<string, string | ((...args: any[]) => any)> = {};
+export interface ScanResult {
+  requests?: (Request | WebSocketRequest | GrpcRequest)[];
+  workspaces?: Workspace[];
+  environments?: BaseEnvironment[];
+  apiSpecs?: ApiSpec[];
+  cookieJars?: CookieJar[];
+  unitTests?: UnitTest[];
+  unitTestSuites?: UnitTestSuite[];
+  mockRoutes?: MockRoute[];
+  type?: InsomniaImporter;
+  oriFileName?: string;
+  errors: string[];
+}
 
-  for (const r of data.resources) {
-    for (const key of r._id.match(REPLACE_ID_REGEX) || []) {
-      generatedIds[key] = generateId(models.MODELS_BY_EXPORT_TYPE[r._type].prefix);
+interface ResourceCacheType {
+  content: string;
+  resources: BaseModel[];
+  importer: InsomniaImporter;
+};
+
+let resourceCacheList: ResourceCacheType[] = [];
+
+export async function scanResources(contentList: string[] | ImportFileDetail[]): Promise<ScanResult[]> {
+  resourceCacheList = [];
+  const results = await Promise.allSettled(contentList.map(async content => {
+    const contentStr = typeof content === 'string' ? content : content.contentStr;
+    const oriFileName = typeof content === 'string' ? '' : content.oriFileName;
+
+    let result: ConvertResult | null = null;
+
+    try {
+      result = (await convert(contentStr)) as unknown as ConvertResult;
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        return {
+          oriFileName,
+          errors: [err.message],
+        };
+      }
     }
-  }
 
-  // Contains the ID of the workspace to be used with the import
-  generatedIds[WORKSPACE_ID_KEY] = async () => {
-    const workspaceId = await getWorkspaceId();
-    // First try getting the workspace to overwrite
-    const workspace = await models.workspace.getById(workspaceId || 'n/a');
-    // Update this fn so it doesn't run again
-    const idToUse = workspace?._id || generateId(models.workspace.prefix);
-    generatedIds[WORKSPACE_ID_KEY] = idToUse;
-    return idToUse;
-  };
+    if (!result) {
+      return {
+        oriFileName,
+        errors: ['No resources found to import.'],
+      };
+    }
 
-  // Contains the ID of the base environment to be used with the import
-  generatedIds[BASE_ENVIRONMENT_ID_KEY] = async () => {
-    const parentId = await fnOrString(generatedIds[WORKSPACE_ID_KEY]);
-    const baseEnvironment = await models.environment.getOrCreateForParentId(parentId);
-    // Update this fn so it doesn't run again
-    generatedIds[BASE_ENVIRONMENT_ID_KEY] = baseEnvironment._id;
-    return baseEnvironment._id;
-  };
+    const { type, data } = result;
 
-  // NOTE: Although the order of the imported resources is not guaranteed,
-  // all current importers will produce resources in this order:
-  // Workspace > Environment > RequestGroup > Request
-  // Import everything backwards so they get inserted in the correct order
-  data.resources.reverse();
-  const importedDocs: Record<string, any[]> = {};
+    const resources = data.resources
+      .filter(r => r._type)
+      .map(r => {
+        const { _type, ...model } = r;
+        return { ...model, type: models.MODELS_BY_EXPORT_TYPE[_type].type };
+      });
 
-  for (const model of models.all()) {
-    importedDocs[model.type] = [];
-  }
-
-  // Add a workspace to the resources if it doesn't exist
-  // NOTE: The workspace should be the last item of the resources
-  if (!data.resources.some(resource => resource._type === EXPORT_TYPE_WORKSPACE)) {
-    data.resources.push({
-      _id: WORKSPACE_ID_KEY,
-      _type: EXPORT_TYPE_WORKSPACE,
+    resourceCacheList.push({
+      resources,
+      importer: type,
+      content: contentStr,
     });
-  }
 
-  for (const resource of data.resources) {
-    // Buffer DB changes
-    // NOTE: Doing it inside here so it's more "scalable"
-    await db.bufferChanges(100);
+    const requests = resources.filter(isRequest);
+    const websocketRequests = resources.filter(isWebSocketRequest);
+    const grpcRequests = resources.filter(isGrpcRequest);
+    const environments = resources.filter(isEnvironment);
+    const unitTests = resources.filter(isUnitTest);
+    const unitTestSuites = resources.filter(isUnitTestSuite);
+    const apiSpecs = resources.filter(isApiSpec);
+    const workspaces = resources.filter(isWorkspace);
+    const cookieJars = resources.filter(isCookieJar);
+    const mockRoutes = resources.filter(isMockRoute);
 
-    // Replace null parentIds with current workspace
-    if (!resource.parentId && resource._type !== EXPORT_TYPE_WORKSPACE) {
-      resource.parentId = WORKSPACE_ID_KEY;
-    }
-
-    // Replace ID placeholders (eg. __WORKSPACE_ID__) with generated values
-    for (const key of Object.keys(generatedIds)) {
-      const { parentId, _id } = resource;
-
-      if (parentId?.includes(key)) {
-        resource.parentId = parentId.replace(key, await fnOrString(generatedIds[key]));
+    return {
+      type,
+      unitTests,
+      unitTestSuites,
+      requests: [...requests, ...websocketRequests, ...grpcRequests],
+      workspaces,
+      environments,
+      apiSpecs,
+      cookieJars,
+      mockRoutes,
+      oriFileName,
+      errors: [],
+    };
+  }));
+  return results.map(
+    retObj => retObj.status === 'fulfilled'
+      ? retObj.value
+      : {
+        errors: [retObj.reason.toString()],
       }
+  );
+}
 
-      if (_id && _id.includes(key)) {
-        resource._id = _id.replace(key, await fnOrString(generatedIds[key]));
-      }
-    }
+export async function importResourcesToProject({ projectId }: { projectId: string }) {
+  invariant(resourceCacheList.length > 0, 'No resources to import');
+  for (const resourceCacheItem of resourceCacheList) {
+    const {
+      resources,
+      importer,
+    } = resourceCacheItem;
+    const bufferId = await db.bufferChanges();
 
-    const model = models.MODELS_BY_EXPORT_TYPE[resource._type];
-
-    if (!model) {
-      console.warn('Unknown doc type for import', resource._type);
+    // if the resource is postman collection
+    const postmanTopLevelFolder = resources.find(
+      resource => isRequestGroup(resource) && resource.parentId === '__WORKSPACE_ID__'
+    ) as Workspace | undefined;
+    if (importer.id === 'postman' && postmanTopLevelFolder) {
+      await importResourcesToNewWorkspace(projectId, resourceCacheItem, postmanTopLevelFolder);
       continue;
     }
 
-    // Hack to switch to GraphQL based on finding `graphql` in the URL path
-    // TODO: Support this in a better way
-    if (
-      isRequest(model) &&
-      resource.body &&
-      typeof resource.body.text === 'string' &&
-      typeof resource.url === 'string' &&
-      resource.body.text.includes('"query"') &&
-      resource.url.includes('graphql')
-    ) {
-      resource.body.mimeType = CONTENT_TYPE_GRAPHQL;
+    // if the resource is postman environment,
+    if (importer.id === postmanEnvImporterId && resources.find(isEnvironment)) {
+      await Promise.all(resources.filter(isEnvironment).map(resource =>
+        importResourcesToNewWorkspace(projectId, resourceCacheItem, {
+          name: resource.name,
+          scope: 'environment',
+          // __BASE_ENVIRONMENT_ID__ is the default parentId for environment imported by postman env importer, we use it to indicate the new workspace id
+          _id: '__BASE_ENVIRONMENT_ID__',
+        } as Workspace)
+      ));
+      continue;
     }
 
-    // Try adding Content-Type JSON if no Content-Type exists
-    if (
-      isRequest(model) &&
-      resource.body &&
-      typeof resource.body.text === 'string' &&
-      Array.isArray(resource.headers) &&
-      !resource.headers.find(h => h.name.toLowerCase() === 'content-type')
-    ) {
-      try {
-        JSON.parse(resource.body.text);
-        resource.headers.push({
-          name: 'Content-Type',
-          value: 'application/json',
-        });
-      } catch (err) {
-        // Not JSON
-      }
+    // No workspace, so create one
+    if (!resources.find(isWorkspace)) {
+      await importResourcesToNewWorkspace(projectId, resourceCacheItem);
+      continue;
     }
 
-    const existingDoc = await db.get(model.type, resource._id);
-    let newDoc: BaseModel;
+    // One or more workspaces, add all resources to all workspaces, this could import repeatedly
+    await Promise.all(resources.filter(isWorkspace)
+      .map(resource => importResourcesToNewWorkspace(projectId, resourceCacheItem, resource)));
 
-    if (existingDoc) {
-      let updateDoc = resource;
-
-      // Do differential patching when enabled
-      if (enableDiffBasedPatching) {
-        updateDoc = diffPatchObj(resource, existingDoc, enableDiffDeep);
-      }
-
-      // Bypass differential update for urls when enabled
-      if (bypassDiffProps?.url && updateDoc.url) {
-        updateDoc.url = resource.url;
-      }
-
-      // If workspace preserve the scope and parentId of the existing workspace while importing
-      if (isWorkspace(model)) {
-        (updateDoc as Workspace).scope = (existingDoc as Workspace).scope;
-        (updateDoc as Workspace).parentId = (existingDoc as Workspace).parentId;
-      }
-
-      newDoc = await db.docUpdate(existingDoc, updateDoc);
-    } else {
-      // If workspace, check and set the scope and parentId while importing a new workspace
-      if (isWorkspace(model)) {
-        await updateWorkspaceScope(resource as Workspace, resultsType, getWorkspaceScope);
-
-        // If the workspace doesn't have a name, update the default name based on it's scope
-        if (!resource.name) {
-          const name =
-            (resource as Workspace).scope === 'collection'
-              ? `My ${strings.collection.singular}`
-              : `My ${strings.document.singular}`;
-
-          resource.name = name;
-        }
-
-        await createWorkspaceInProject(resource as Workspace, getProjectId);
-      }
-
-      newDoc = await db.docCreate(model.type, resource);
-
-      // Mark as not seen if we created a new workspace from sync
-      if (isWorkspace(newDoc)) {
-        const workspaceMeta = await models.workspaceMeta.getOrCreateByParentId(newDoc._id);
-        await models.workspaceMeta.update(workspaceMeta, {
-          hasSeen: false,
-        });
-      }
-    }
-
-    importedDocs[newDoc.type].push(newDoc);
+    await db.flushChanges(bufferId);
   }
+}
+const isTeamOrAbove = async () => {
+  const { accountId } = await userSession.getOrCreate();
+  const currentPlan = JSON.parse(localStorage.getItem(`${accountId}:currentPlan`) || '{}') as CurrentPlan || {};
+  return ['team', 'enterprise', 'enterprise-member'].includes(currentPlan?.type);
+};
+const updateIdsInString = (str: string, ResourceIdMap: Map<string, string>) => {
+  let newString = str;
+  for (const [idA, idB] of ResourceIdMap.entries()) {
+    newString = newString.replace(new RegExp(idA, 'g'), idB);
+  }
+  return newString;
+};
+const importRequestWithNewIds = (request: Request, ResourceIdMap: Map<string, string>, canTransform: boolean) => {
+  let transformedRequest = request;
+  if (canTransform) { // if not logged in, this wont run
+    transformedRequest = JSON.parse(updateIdsInString(JSON.stringify(request), ResourceIdMap));
+  }
+  return ({
+    ...transformedRequest,
+    _id: ResourceIdMap.get(request._id),
+    parentId: ResourceIdMap.get(request.parentId),
+  });
+};
 
-  // Store spec under workspace if it's OpenAPI
-  for (const workspace of importedDocs[models.workspace.type]) {
-    if (isApiSpecImport(resultsType)) {
-      const spec = await models.apiSpec.updateOrCreateForParentId(workspace._id, {
-        contents: rawContent,
-        contentType: 'yaml',
+export const importResourcesToWorkspace = async ({ workspaceId }: { workspaceId: string }) => {
+  invariant(resourceCacheList.length > 0, 'No resources to import');
+  for (const resourceCacheItem of resourceCacheList) {
+    const resources = resourceCacheItem.resources;
+    const bufferId = await db.bufferChanges();
+    const ResourceIdMap = new Map();
+    const existingWorkspace = await models.workspace.getById(workspaceId);
+
+    invariant(
+      existingWorkspace,
+      `Could not find workspace with id ${workspaceId}`
+    );
+    // Map new IDs
+    ResourceIdMap.set(workspaceId, existingWorkspace._id);
+    ResourceIdMap.set('__WORKSPACE_ID__', existingWorkspace._id);
+    const toImport = resources.find(isWorkspace);
+    toImport && ResourceIdMap.set(toImport._id, existingWorkspace._id);
+
+    const optionalResources = resources.filter(
+      resource =>
+        !isWorkspace(resource) &&
+        !isApiSpec(resource) &&
+        !isCookieJar(resource) &&
+        !isEnvironment(resource)
+    );
+
+    const baseEnvironment = await models.environment.getOrCreateForParentId(workspaceId);
+    invariant(baseEnvironment, 'Could not create base environment');
+
+    const baseEnvironmentFromResources = resources.filter(isEnvironment).find(env => env.parentId && env.parentId.startsWith('__WORKSPACE_ID__'));
+    if (baseEnvironmentFromResources) {
+      await models.environment.update(baseEnvironment, { data: baseEnvironmentFromResources.data });
+    }
+    const subEnvironments = resources.filter(isEnvironment).filter(isSubEnvironmentResource) || [];
+
+    for (const environment of subEnvironments) {
+      const model = getModel(environment.type);
+      model && ResourceIdMap.set(environment._id, generateId(model.prefix));
+      await models.environment.create({
+        ...environment,
+        _id: ResourceIdMap.get(environment._id),
+        parentId: baseEnvironment._id,
       });
-      importedDocs[spec.type].push(spec);
     }
 
-    // Set active environment when none is currently selected and one exists
-    const meta = await models.workspaceMeta.getOrCreateByParentId(workspace._id);
-    const envs = importedDocs[models.environment.type];
-
-    if (!meta.activeEnvironmentId && envs.length > 0) {
-      meta.activeEnvironmentId = envs[0]._id;
-      await models.workspaceMeta.update(meta);
+    // Create new ids for each resource below optionalResources
+    for (const resource of optionalResources) {
+      const model = getModel(resource.type);
+      model && ResourceIdMap.set(resource._id, generateId(model.prefix));
     }
-  }
 
-  await db.flushChanges();
-  trackSegmentEvent(SegmentEvent.dataImport, { type: resultsType.id });
-  const importRequest: ImportResult = {
-    source: resultsType && typeof resultsType.id === 'string' ? resultsType.id : 'unknown',
-    summary: importedDocs,
-    error: null,
-  };
-  return importRequest;
-}
+    const canTransform = await isTeamOrAbove();
+    // Preserve optionalResource relationships
+    for (const resource of optionalResources) {
+      const model = getModel(resource.type);
+      if (model) {
+        // Make sure we point to the new proto file
+        if (isGrpcRequest(resource)) {
+          await models.grpcRequest.create({
+            ...resource,
+            _id: ResourceIdMap.get(resource._id),
+            protoFileId: ResourceIdMap.get(resource.protoFileId),
+            parentId: ResourceIdMap.get(resource.parentId),
+          });
 
-async function updateWorkspaceScope(
-  resource: Workspace,
-  resultType: ConvertResultType,
-  getWorkspaceScope?: SetWorkspaceScopePrompt,
-) {
-  // Set the workspace scope if creating a new workspace during import
-  //  IF is creating a new workspace
-  //  AND imported resource has no preset scope property OR scope is null
-  //  AND we have a function to get scope
-  if ((!resource.hasOwnProperty('scope') || resource.scope === null) && getWorkspaceScope) {
-    const workspaceName = resource.name;
-    let specName;
-
-    // If is from insomnia v4 and the spec has contents, add to the name when prompting
-    if (isInsomniaV4Import(resultType)) {
-      const spec: ApiSpec | null = await models.apiSpec.getByParentId(resource._id);
-
-      if (spec && spec.contents.trim()) {
-        specName = spec.fileName;
+          // Make sure we point unit test to the new request
+        } else if (isUnitTest(resource)) {
+          await models.unitTest.create({
+            ...resource,
+            _id: ResourceIdMap.get(resource._id),
+            requestId: ResourceIdMap.get(resource.requestId),
+            parentId: ResourceIdMap.get(resource.parentId),
+          });
+        } else if (isRequest(resource)) {
+          await models.request.create(importRequestWithNewIds(resource, ResourceIdMap, canTransform));
+        } else {
+          await db.docCreate(model.type, {
+            ...resource,
+            _id: ResourceIdMap.get(resource._id),
+            parentId: ResourceIdMap.get(resource.parentId),
+          });
+        }
       }
     }
 
-    const nameToPrompt = specName ? `${specName} / ${workspaceName}` : workspaceName;
-    resource.scope = await getWorkspaceScope(nameToPrompt);
+    await db.flushChanges(bufferId);
   }
-}
+};
 
-async function createWorkspaceInProject(
-  resource: Workspace,
-  getProjectId?: () => Promise<string>,
-) {
-  if (getProjectId) {
-    // Set the workspace parent if creating a new workspace during import
-    resource.parentId = await getProjectId();
+export const isApiSpecImport = ({ id }: Pick<InsomniaImporter, 'id'>) =>
+  id === 'openapi3' || id === 'swagger2';
+
+const importResourcesToNewWorkspace = async (
+  projectId: string,
+  resourceCacheItem: ResourceCacheType,
+  workspaceToImport?: Workspace
+) => {
+  invariant(resourceCacheItem, 'No resources to import');
+  const resources = resourceCacheItem.resources;
+  const ResourceIdMap = new Map();
+  // in order to support import from api spec yaml
+  if (resourceCacheItem?.importer?.id && isApiSpecImport(resourceCacheItem.importer)) {
+    const newWorkspace = await models.workspace.create({
+      name: workspaceToImport?.name,
+      scope: 'design',
+      parentId: projectId,
+    });
+    models.apiSpec.updateOrCreateForParentId(newWorkspace._id, {
+      contents: resourceCacheItem.content as string | undefined,
+      contentType: 'yaml',
+      fileName: workspaceToImport?.name,
+    });
+    return {
+      resources,
+      workspace: newWorkspace,
+    };
   }
-}
+  const newWorkspace = await models.workspace.create({
+    name: workspaceToImport?.name || 'Imported Workspace',
+    scope: workspaceToImport?.scope || 'collection',
+    parentId: projectId,
+  });
+  const apiSpec = resources.find(r => r.type === 'ApiSpec' && r.parentId === workspaceToImport?._id) as ApiSpec;
+  const hasApiSpec = newWorkspace.scope === 'design' && isApiSpec(apiSpec);
+  // if workspace is not in the resources, there will be no apiSpec, if resource type is set to api spec this could cause a bug
+  if (hasApiSpec) {
+    // TODO: will overwrite existing api spec, not needed after migrate hack is removed
+    await models.apiSpec.updateOrCreateForParentId(newWorkspace._id, {
+      contents: apiSpec.contents,
+      contentType: apiSpec.contentType,
+      fileName: workspaceToImport?.name,
+    });
 
-export const isApiSpecImport = ({ id }: Pick<ConvertResultType, 'id'>) => (
-  id === 'openapi3' || id === 'swagger2'
-);
+  }
 
-export const isInsomniaV4Import = ({ id }: Pick<ConvertResultType, 'id'>) => (
-  id === 'insomnia-4'
-);
+  // If we're importing into a new workspace
+  // Map new IDs
+  ResourceIdMap.set('__WORKSPACE_ID__', newWorkspace._id);
+  workspaceToImport && ResourceIdMap.set(workspaceToImport._id, newWorkspace._id);
+
+  const resourcesWithoutWorkspaceAndApiSpec = resources.filter(
+    resource => !isWorkspace(resource) && !isApiSpec(resource)
+  );
+
+  for (const resource of resourcesWithoutWorkspaceAndApiSpec) {
+    const model = getModel(resource.type);
+    model && ResourceIdMap.set(resource._id, generateId(model.prefix));
+  }
+
+  const canTransform = await isTeamOrAbove();
+  for (const resource of resourcesWithoutWorkspaceAndApiSpec) {
+    const model = getModel(resource.type);
+
+    if (model) {
+      if (isGrpcRequest(resource)) {
+        await models.grpcRequest.create({
+          ...resource,
+          _id: ResourceIdMap.get(resource._id),
+          protoFileId: ResourceIdMap.get(resource.protoFileId),
+          parentId: ResourceIdMap.get(resource.parentId),
+        });
+      } else if (isUnitTest(resource)) {
+        await models.unitTest.create({
+          ...resource,
+          _id: ResourceIdMap.get(resource._id),
+          requestId: ResourceIdMap.get(resource.requestId),
+          parentId: ResourceIdMap.get(resource.parentId),
+        });
+      } else if (isRequest(resource)) {
+        await models.request.create(importRequestWithNewIds(resource, ResourceIdMap, canTransform));
+      } else {
+        await db.docCreate(model.type, {
+          ...resource,
+          _id: ResourceIdMap.get(resource._id),
+          parentId: ResourceIdMap.get(resource.parentId),
+        });
+      }
+    }
+  }
+
+  // Use the first sub environment as the active one
+  const subEnvironments = resources.filter(isEnvironment).filter(isSubEnvironmentResource) || [];
+
+  if (subEnvironments.length > 0) {
+    const firstSubEnvironment = subEnvironments[0];
+
+    if (firstSubEnvironment) {
+      const workspaceMeta = await models.workspaceMeta.getOrCreateByParentId(
+        newWorkspace._id
+      );
+
+      await models.workspaceMeta.update(workspaceMeta, {
+        activeEnvironmentId: ResourceIdMap.get(firstSubEnvironment._id),
+      });
+    }
+  }
+  return {
+    resources: resources.map(r => ({
+      ...r,
+      _id: ResourceIdMap.get(r._id),
+      parentId: ResourceIdMap.get(r.parentId),
+    })),
+    workspace: newWorkspace,
+  };
+};

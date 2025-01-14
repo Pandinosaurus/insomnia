@@ -1,15 +1,14 @@
-import { beforeEach, describe, expect, it } from '@jest/globals';
+import { beforeEach, describe, expect, it } from 'vitest';
 import YAML from 'yaml';
 
-import { globalBeforeEach } from '../../__jest__/before-each';
+import { database as db } from '../../common/database';
 import * as models from '../../models';
 import { getAppVersion } from '../constants';
 import { exportRequestsData, exportRequestsHAR, exportWorkspacesData, exportWorkspacesHAR } from '../export';
-
 describe('exportWorkspacesHAR() and exportRequestsHAR()', () => {
   beforeEach(async () => {
-    await globalBeforeEach();
     await models.project.all();
+    await models.settings.getOrCreate();
   });
 
   it('exports a single workspace and some requests only as an HTTP Archive', async () => {
@@ -110,6 +109,8 @@ describe('exportWorkspacesHAR() and exportRequestsHAR()', () => {
   });
 
   it('exports all workspaces as an HTTP Archive', async () => {
+    await db.init(models.types(), { inMemoryOnly: true }, true, () => { },);
+
     const wrk1 = await models.workspace.create({
       _id: 'wrk_1',
       name: 'Workspace 1',
@@ -210,14 +211,10 @@ describe('exportWorkspacesHAR() and exportRequestsHAR()', () => {
 });
 
 describe('export', () => {
-  beforeEach(globalBeforeEach);
-
   it('exports all workspaces and some requests only', async () => {
     const w = await models.workspace.create({
       name: 'Workspace',
     });
-    const spec = await models.apiSpec.getByParentId(w._id); // Created by workspace migration
-
     const jar = await models.cookieJar.getOrCreateForParentId(w._id);
     const r1 = await models.request.create({
       name: 'Request 1',
@@ -269,7 +266,7 @@ describe('export', () => {
     const exportWorkspacesDataJson = JSON.parse(exportedWorkspacesJson);
     const exportWorkspacesDataYaml = YAML.parse(exportedWorkspacesYaml);
     // Ensure JSON is the same as YAML
-    expect(exportWorkspacesDataJson.resources).toEqual(exportWorkspacesDataYaml.resources);
+    expect(exportWorkspacesDataYaml.resources).toMatchObject(exportWorkspacesDataJson.resources);
     expect(exportWorkspacesDataJson).toMatchObject({
       _type: 'export',
       __export_format: 4,
@@ -278,9 +275,6 @@ describe('export', () => {
       resources: expect.arrayContaining([
         expect.objectContaining({
           _id: w._id,
-        }),
-        expect.objectContaining({
-          _id: spec?._id,
         }),
         expect.objectContaining({
           _id: eBase._id,
@@ -317,7 +311,7 @@ describe('export', () => {
         }),
       ]),
     });
-    expect(exportWorkspacesDataJson.resources.length).toBe(13);
+    expect(exportWorkspacesDataJson.resources.length).toBe(12);
     // Test export some requests only.
     const exportRequestsJson = await exportRequestsData([r1, gr1], false, 'json');
     const exportRequestsYaml = await exportRequestsData([r1, gr1], false, 'yaml');
@@ -355,8 +349,8 @@ describe('export', () => {
         }),
       ]),
     });
-    expect(exportRequestsDataJSON.resources.length).toBe(10);
-    expect(exportRequestsDataYAML.resources.length).toBe(10);
+    expect(exportRequestsDataJSON.resources.length).toBe(9);
+    expect(exportRequestsDataYAML.resources.length).toBe(9);
     // Ensure JSON and YAML are the same
     expect(exportRequestsDataJSON.resources).toEqual(exportRequestsDataYAML.resources);
   });

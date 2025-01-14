@@ -1,23 +1,18 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import HTTPSnippet, { HTTPSnippetClient, HTTPSnippetTarget } from 'httpsnippet';
-import React, { PureComponent } from 'react';
+import type { HTTPSnippetClient, HTTPSnippetTarget } from 'httpsnippet';
+import React, { forwardRef, useCallback, useImperativeHandle, useRef, useState } from 'react';
+import { Button } from 'react-aria-components';
 
-import { AUTOBIND_CFG } from '../../../common/constants';
-import { exportHarRequest } from '../../../common/har';
-import { Request } from '../../../models/request';
+import { exportHarWithRequest } from '../../../common/har';
+import type { Request } from '../../../models/request';
 import { CopyButton } from '../base/copy-button';
-import { Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
+import { Dropdown, DropdownItem, ItemContent } from '../base/dropdown';
 import { Link } from '../base/link';
-import { type ModalHandle, Modal } from '../base/modal';
+import { Modal, type ModalHandle, type ModalProps } from '../base/modal';
 import { ModalBody } from '../base/modal-body';
 import { ModalFooter } from '../base/modal-footer';
 import { ModalHeader } from '../base/modal-header';
-import { CodeEditor,  UnconnectedCodeEditor } from '../codemirror/code-editor';
+import { CodeEditor, type CodeEditorHandle } from '../codemirror/code-editor';
 
-const DEFAULT_TARGET = HTTPSnippet.availableTargets().find(t => t.key === 'shell') as HTTPSnippetTarget;
-const DEFAULT_CLIENT = DEFAULT_TARGET?.clients.find(t => t.key === 'curl') as HTTPSnippetClient;
 const MODE_MAP: Record<string, string> = {
   c: 'clike',
   java: 'clike',
@@ -30,186 +25,173 @@ const TO_ADD_CONTENT_LENGTH: Record<string, string[]> = {
   node: ['native'],
 };
 
-interface Props {
+type Props = ModalProps & {
   environmentId: string;
-}
-
-interface State {
-  cmd: string;
+};
+export interface GenerateCodeModalOptions {
   request?: Request;
-  target: HTTPSnippetTarget;
-  client: HTTPSnippetClient;
 }
+export interface State {
+  request?: Request;
+  target?: HTTPSnippetTarget;
+  client?: HTTPSnippetClient;
+  targets: HTTPSnippetTarget[];
+}
+export interface GenerateCodeModalHandle {
+  show: (options: GenerateCodeModalOptions) => void;
+  hide: () => void;
+}
+export const GenerateCodeModal = forwardRef<GenerateCodeModalHandle, Props>((props, ref) => {
+  const modalRef = useRef<ModalHandle>(null);
+  const editorRef = useRef<CodeEditorHandle>(null);
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class GenerateCodeModal extends PureComponent<Props, State> {
-  constructor(props: Props) {
-    super(props);
-    let target: HTTPSnippetTarget | undefined;
-    let client: HTTPSnippetClient | undefined;
+  let storedTarget: HTTPSnippetTarget | undefined;
+  let storedClient: HTTPSnippetClient | undefined;
+  try {
+    storedTarget = JSON.parse(window.localStorage.getItem('insomnia::generateCode::target') || '') as HTTPSnippetTarget;
+  } catch (error) { }
 
-    // Load preferences from localStorage
-    try {
-      target = JSON.parse(window.localStorage.getItem('insomnia::generateCode::target') || '') as HTTPSnippetTarget;
-    } catch (error) {}
+  try {
+    storedClient = JSON.parse(window.localStorage.getItem('insomnia::generateCode::client') || '') as HTTPSnippetClient;
+  } catch (error) { }
+  const [state, setState] = useState<State>({
+    request: undefined,
+    target: storedTarget,
+    client: storedClient,
+    targets: [],
+  });
 
-    try {
-      client = JSON.parse(window.localStorage.getItem('insomnia::generateCode::client') || '') as HTTPSnippetClient;
-    } catch (error) {}
+  const [snippet, setSnippet] = useState<string>('');
 
-    this.state = {
-      cmd: '',
-      request: undefined,
-      target: target || DEFAULT_TARGET,
-      client: client || DEFAULT_CLIENT,
-    };
-  }
+  const generateCode = useCallback(async (request: Request, target?: HTTPSnippetTarget, client?: HTTPSnippetClient) => {
+    const HTTPSnippet = (await import('httpsnippet')).default;
 
-  modal: ModalHandle | null = null;
-  _editor: UnconnectedCodeEditor | null = null;
+    const targets = HTTPSnippet.availableTargets();
+    const targetOrFallback = target || targets.find(t => t.key === 'shell') as HTTPSnippetTarget;
+    const clientOrFallback = client || targetOrFallback.clients.find(t => t.key === 'curl') as HTTPSnippetClient;
 
-  _setModalRef(modal: ModalHandle) {
-    this.modal = modal;
-  }
-
-  _setEditorRef(editor: UnconnectedCodeEditor) {
-    this._editor = editor;
-  }
-
-  hide() {
-    this.modal?.hide();
-  }
-
-  _handleClientChange(client: HTTPSnippetClient) {
-    const { target, request } = this.state;
-
-    if (!request) {
-      return;
-    }
-    this._generateCode(request, target, client);
-  }
-
-  _handleTargetChange(target: HTTPSnippetTarget) {
-    const { target: currentTarget, request } = this.state;
-
-    if (currentTarget.key === target.key) {
-      // No change
-      return;
-    }
-
-    const client = target.clients.find(c => c.key === target.default);
-
-    if (!request) {
-      return;
-    }
-    // TODO: remove non-null assertion
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    this._generateCode(request, target, client!);
-  }
-
-  async _generateCode(request: Request, target: HTTPSnippetTarget, client: HTTPSnippetClient) {
-    // Some clients need a content-length for the request to succeed
-    const addContentLength = Boolean((TO_ADD_CONTENT_LENGTH[target.key] || []).find(c => c === client.key));
-    const { environmentId } = this.props;
-    const har = await exportHarRequest(request._id, environmentId, addContentLength);
-    // @TODO Should we throw instead?
-    if (!har) {
-      return;
-    }
-    const snippet = new HTTPSnippet(har);
-    const cmd = snippet.convert(target.key, client.key) || '';
-    this.setState({
+    setState({
       request,
-      cmd,
-      client,
-      target,
+      client: clientOrFallback,
+      target: targetOrFallback,
+      targets,
     });
     // Save client/target for next time
-    window.localStorage.setItem('insomnia::generateCode::client', JSON.stringify(client));
-    window.localStorage.setItem('insomnia::generateCode::target', JSON.stringify(target));
-  }
+    window.localStorage.setItem('insomnia::generateCode::client', JSON.stringify(clientOrFallback));
+    window.localStorage.setItem('insomnia::generateCode::target', JSON.stringify(targetOrFallback));
 
-  show(request: Request) {
-    const { client, target } = this.state;
-
-    this._generateCode(request, target, client);
-
-    this.modal?.show();
-  }
-
-  render() {
-    const { cmd, target, client } = this.state;
-    const targets = HTTPSnippet.availableTargets();
-    // NOTE: Just some extra precautions in case the target is messed up
-    let clients: HTTPSnippetClient[] = [];
-
-    if (target && Array.isArray(target.clients)) {
-      clients = target.clients;
+    // Some clients need a content-length for the request to succeed
+    const addContentLength = Boolean((TO_ADD_CONTENT_LENGTH[targetOrFallback.key] || []).find(c => c === clientOrFallback.key));
+    const har = await exportHarWithRequest(request, props.environmentId, addContentLength);
+    if (har) {
+      const snippet = new HTTPSnippet(har);
+      const cmd = snippet.convert(targetOrFallback.key, clientOrFallback.key) || '';
+      setSnippet(cmd);
     }
+  }, [props.environmentId]);
 
-    return (
-      <Modal ref={this._setModalRef} tall {...this.props}>
-        <ModalHeader>Generate Client Code</ModalHeader>
-        <ModalBody
-          noScroll
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0, 1fr)',
-            gridTemplateRows: 'auto minmax(0, 1fr)',
-          }}
-        >
-          <div className="pad">
-            <Dropdown outline>
-              <DropdownButton className="btn btn--clicky">
-                {
-                  target ? target.title : 'n/a'
-                }
+  useImperativeHandle(ref, () => ({
+    hide: () => {
+      modalRef.current?.hide();
+    },
+    show: options => {
+      if (!options.request) {
+        return;
+      }
+      generateCode(options.request, state.target, state.client);
+      modalRef.current?.show();
+    },
+  }), [generateCode, state]);
+
+  const { target, targets, client, request } = state;
+  // NOTE: Just some extra precautions in case the target is messed up
+  let clients: HTTPSnippetClient[] = [];
+  if (target && Array.isArray(target.clients)) {
+    clients = target.clients;
+  }
+  return (
+    <Modal ref={modalRef} tall {...props}>
+      <ModalHeader>Generate Client Code</ModalHeader>
+      <ModalBody
+        noScroll
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr)',
+          gridTemplateRows: 'auto minmax(0, 1fr)',
+        }}
+      >
+        <div className="pad">
+          <Dropdown
+            aria-label='Select a target'
+            triggerButton={
+              <Button className="border border-solid border-[--hl-lg] px-[--padding-md] h-[--line-height-xs] rounded-[--radius-md] hover:bg-[--hl-xs]">
+                {target ? target.title : 'n/a'}
                 <i className="fa fa-caret-down" />
-              </DropdownButton>
-              {targets.map(target => (
-                <DropdownItem key={target.key} onClick={this._handleTargetChange} value={target}>
-                  {target.title}
-                </DropdownItem>
-              ))}
-            </Dropdown>
-            &nbsp;&nbsp;
-            <Dropdown outline>
-              <DropdownButton className="btn btn--clicky">
+              </Button>
+            }
+          >
+            {targets.map(target => (
+              <DropdownItem
+                key={target.key}
+                aria-label={target.title}
+              >
+                <ItemContent
+                  label={target.title}
+                  onClick={() => {
+                    const client = target.clients.find(c => c.key === target.default);
+                    if (request && client) {
+                      generateCode(request, target, client);
+                    }
+                  }}
+                />
+              </DropdownItem>
+            ))}
+          </Dropdown>
+          &nbsp;&nbsp;
+          <Dropdown
+            aria-label='Select a client'
+            triggerButton={
+              <Button className="border border-solid border-[--hl-lg] px-[--padding-md] h-[--line-height-xs] rounded-[--radius-md] hover:bg-[--hl-xs]">
                 {client ? client.title : 'n/a'}
                 <i className="fa fa-caret-down" />
-              </DropdownButton>
-              {clients.map(client => (
-                <DropdownItem
-                  key={client.key}
-                  onClick={this._handleClientChange}
-                  value={client}
-                >
-                  {client.title}
-                </DropdownItem>
-              ))}
-            </Dropdown>
-            &nbsp;&nbsp;
-            <CopyButton content={cmd} className="pull-right" />
-          </div>
-          <CodeEditor
-            placeholder="Generating code snippet..."
-            className="border-top"
-            key={Date.now()}
-            mode={MODE_MAP[target.key] || target.key}
-            ref={this._setEditorRef}
-            defaultValue={cmd}
-          />
-        </ModalBody>
-        <ModalFooter>
-          <div className="margin-left italic txt-sm">
-            * Code snippets generated by&nbsp;
-            <Link href="https://github.com/Kong/httpsnippet">httpsnippet</Link>
-          </div>
-          <button className="btn" onClick={this.hide}>
-            Done
-          </button>
-        </ModalFooter>
-      </Modal>
-    );
-  }
-}
+              </Button>
+            }
+          >
+            {clients.map(client => (
+              <DropdownItem
+                key={client.key}
+                aria-label={client.title}
+              >
+                <ItemContent
+                  label={client.title}
+                  onClick={() => request && generateCode(request, state.target, client)}
+                />
+              </DropdownItem>
+            ))}
+          </Dropdown>
+          &nbsp;&nbsp;
+          <CopyButton content={snippet} className="pull-right" />
+        </div>
+        {target && <CodeEditor
+          id="generate-code-modal-content"
+          placeholder="Generating code snippet..."
+          className="border-top"
+          key={Date.now()}
+          mode={MODE_MAP[target.key] || target.key}
+          ref={editorRef}
+          defaultValue={snippet}
+        />}
+      </ModalBody>
+      <ModalFooter>
+        <div className="margin-left italic txt-sm">
+          * Code snippets generated by&nbsp;
+          <Link href="https://github.com/Kong/httpsnippet">httpsnippet</Link>
+        </div>
+        <button className="btn" onClick={() => modalRef.current?.hide()}>
+          Done
+        </button>
+      </ModalFooter>
+    </Modal>
+  );
+});
+GenerateCodeModal.displayName = 'GenerateCodeModal';

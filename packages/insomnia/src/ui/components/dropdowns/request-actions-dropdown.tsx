@@ -1,76 +1,100 @@
-import classnames from 'classnames';
-import { clipboard } from 'electron';
-import HTTPSnippet from 'httpsnippet';
-import React, { forwardRef, useCallback, useState } from 'react';
-import { useSelector } from 'react-redux';
+import type { IconName } from '@fortawesome/fontawesome-svg-core';
+import React, { Fragment, useCallback, useState } from 'react';
+import { Button, Collection, Header, Menu, MenuItem, MenuTrigger, Popover, Section } from 'react-aria-components';
+import { useFetcher, useParams } from 'react-router-dom';
 
 import { exportHarRequest } from '../../../common/har';
+import { toKebabCase } from '../../../common/misc';
 import { RENDER_PURPOSE_NO_RENDER } from '../../../common/render';
+import type { PlatformKeyCombinations } from '../../../common/settings';
 import type { Environment } from '../../../models/environment';
-import { GrpcRequest } from '../../../models/grpc-request';
-import * as requestOperations from '../../../models/helpers/request-operations';
-import { Project } from '../../../models/project';
-import { isRequest, Request } from '../../../models/request';
+import type { GrpcRequest } from '../../../models/grpc-request';
+import type { Project } from '../../../models/project';
+import { isRequest, type Request } from '../../../models/request';
 import type { RequestGroup } from '../../../models/request-group';
 import { incrementDeletedRequests } from '../../../models/stats';
 // Plugin action related imports
+// Plugin action related imports
+import type { WebSocketRequest } from '../../../models/websocket-request';
 import type { RequestAction } from '../../../plugins';
 import { getRequestActions } from '../../../plugins';
 import * as pluginContexts from '../../../plugins/context/index';
-import { updateRequestMetaByParentId } from '../../hooks/create-request';
-import { selectHotKeyRegistry } from '../../redux/selectors';
-import { type DropdownHandle, type DropdownProps, Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownDivider } from '../base/dropdown/dropdown-divider';
+import { useRequestMetaPatcher } from '../../hooks/use-request';
+import { useRootLoaderData } from '../../routes/root';
 import { DropdownHint } from '../base/dropdown/dropdown-hint';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
-import { PromptButton } from '../base/prompt-button';
-import { showError, showModal } from '../modals';
+import { Icon } from '../icon';
+import { showError, showModal, showPrompt } from '../modals';
+import { AlertModal } from '../modals/alert-modal';
+import { AskModal } from '../modals/ask-modal';
 import { GenerateCodeModal } from '../modals/generate-code-modal';
+import { RequestSettingsModal } from '../modals/request-settings-modal';
 
-interface Props extends Pick<DropdownProps, 'right'> {
-  activeEnvironment?: Environment | null;
+interface Props {
+  activeEnvironment: Environment;
   activeProject: Project;
-  handleDuplicateRequest: Function;
-  handleShowSettings: () => void;
   isPinned: Boolean;
-  request: Request | GrpcRequest;
+  request: Request | GrpcRequest | WebSocketRequest;
   requestGroup?: RequestGroup;
+  isOpen: boolean;
+  onOpenChange: (isOpen: boolean) => void;
+  onRename: () => void;
 }
 
-export const RequestActionsDropdown = forwardRef<DropdownHandle, Props>(({
+export const RequestActionsDropdown = ({
   activeEnvironment,
   activeProject,
-  handleDuplicateRequest,
-  handleShowSettings,
   isPinned,
   request,
-  requestGroup,
-  right,
-}, ref) => {
-  const hotKeyRegistry = useSelector(selectHotKeyRegistry);
+  isOpen,
+  onOpenChange,
+  onRename,
+}: Props) => {
+  const {
+    settings,
+  } = useRootLoaderData();
+  const patchRequestMeta = useRequestMetaPatcher();
+  const { hotKeyRegistry } = settings;
   const [actionPlugins, setActionPlugins] = useState<RequestAction[]>([]);
-  const [loadingActions, setLoadingActions] = useState<Record<string, boolean>>({});
+  const requestFetcher = useFetcher();
+  const { organizationId, projectId, workspaceId } = useParams() as { organizationId: string; projectId: string; workspaceId: string };
+
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
 
   const onOpen = useCallback(async () => {
     const actionPlugins = await getRequestActions();
     setActionPlugins(actionPlugins);
   }, []);
 
-  const handlePluginClick = useCallback(async ({ plugin, action, label }: RequestAction) => {
-    setLoadingActions({ ...loadingActions, [label]: true });
+  const handleDuplicateRequest = () => {
+    if (!request) {
+      return;
+    }
 
+    showPrompt({
+      title: 'Duplicate Request',
+      defaultValue: request.name,
+      submitName: 'Create',
+      label: 'New Name',
+      selectText: true,
+      onComplete: (name: string) => requestFetcher.submit({ name },
+        {
+          action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${request?._id}/duplicate`,
+          method: 'post',
+          encType: 'application/json',
+        }),
+    });
+  };
+
+  const handlePluginClick = async ({ plugin, action }: RequestAction) => {
     try {
-      const activeEnvironmentId = activeEnvironment ? activeEnvironment._id : null;
       const context = {
         ...(pluginContexts.app.init(RENDER_PURPOSE_NO_RENDER)),
         ...pluginContexts.data.init(activeProject._id),
         ...(pluginContexts.store.init(plugin)),
-        ...(pluginContexts.network.init(activeEnvironmentId)),
+        ...(pluginContexts.network.init()),
       };
       await action(context, {
         request,
-        requestGroup,
       });
     } catch (error) {
       showError({
@@ -78,108 +102,220 @@ export const RequestActionsDropdown = forwardRef<DropdownHandle, Props>(({
         error,
       });
     }
-    setLoadingActions({ ...loadingActions, [label]: false });
-    if (ref && 'current' in ref) { // this `in` operator statement type-narrows to `MutableRefObject`
-      ref.current?.hide();
+  };
+
+  const generateCode = () => {
+    if (isRequest(request)) {
+      showModal(GenerateCodeModal, { request });
     }
-  }, [request, activeEnvironment, requestGroup, loadingActions, activeProject._id, ref]);
+  };
 
-  const duplicate = useCallback(() => {
-    handleDuplicateRequest(request);
-  }, [handleDuplicateRequest, request]);
+  const copyAsCurl = async () => {
+    try {
+      const har = await exportHarRequest(request._id, activeEnvironment._id);
+      const HTTPSnippet = (await import('httpsnippet')).default;
+      const snippet = new HTTPSnippet(har);
+      const cmd = snippet.convert('shell', 'curl');
 
-  const generateCode = useCallback(() => {
-    showModal(GenerateCodeModal, request);
-  }, [request]);
-
-  const copyAsCurl = useCallback(async () => {
-    const environmentId = activeEnvironment ? activeEnvironment._id : 'n/a';
-    const har = await exportHarRequest(request._id, environmentId);
-    const snippet = new HTTPSnippet(har);
-    const cmd = snippet.convert('shell', 'curl');
-
-    // @TODO Should we throw otherwise? What should happen if we cannot find cmd?
-    if (cmd) {
-      clipboard.writeText(cmd);
+      if (cmd) {
+        window.clipboard.writeText(cmd);
+      }
+    } catch (err) {
+      showModal(AlertModal, {
+        title: 'Could not generate cURL',
+        message: err instanceof Error ? err.message : 'Unknown error',
+      });
     }
-  }, [activeEnvironment, request._id]);
+  };
 
-  const togglePin = useCallback(() => {
-    updateRequestMetaByParentId(request._id, { pinned: !isPinned });
-  }, [isPinned, request]);
+  const togglePin = () => {
+    patchRequestMeta(request._id, { pinned: !isPinned });
+  };
 
-  const deleteRequest = useCallback(() => {
-    incrementDeletedRequests();
-    requestOperations.remove(request);
-  }, [request]);
+  const deleteRequest = () => {
+    showModal(AskModal, {
+      title: 'Delete Request',
+      message: `Do you really want to delete "${request.name}"?`,
+      yesText: 'Delete',
+      noText: 'Cancel',
+      color: 'danger',
+      onDone: async (isYes: boolean) => {
+        if (isYes) {
+          incrementDeletedRequests();
+          requestFetcher.submit({ id: request._id },
+            {
+              action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/delete`,
+              method: 'post',
+            });
+        }
+      },
+    });
+  };
 
   // Can only generate code for regular requests, not gRPC requests
   const canGenerateCode = isRequest(request);
+
+  const codeGenerationActions: {
+    name: string;
+    id: string;
+    icon: IconName;
+    items: {
+      id: string;
+      name: string;
+      icon: IconName;
+      hint?: PlatformKeyCombinations;
+      action: () => void;
+    }[];
+  }[] = !canGenerateCode ? [] :
+      [{
+        name: 'Export',
+        id: 'export',
+        icon: 'file-export',
+        items: [
+          {
+            id: 'GenerateCode',
+            name: 'Generate Code',
+            action: generateCode,
+            icon: 'code',
+            hint: hotKeyRegistry.request_showGenerateCodeEditor,
+          },
+          {
+            id: 'CopyAsCurl',
+            name: 'Copy as cURL',
+            action: copyAsCurl,
+            icon: 'copy',
+          },
+        ],
+      }];
+
+  const requestActionList: {
+    name: string;
+    id: string;
+    icon: IconName;
+    items: {
+      id: string;
+      name: string;
+      icon: IconName;
+      hint?: PlatformKeyCombinations;
+      action: () => void;
+    }[];
+  }[] = [
+      ...codeGenerationActions,
+      {
+        name: 'Actions',
+        id: 'actions',
+        icon: 'cog',
+        items: [
+          {
+            id: 'Pin',
+            name: isPinned ? 'Unpin' : 'Pin',
+            action: togglePin,
+            icon: 'thumbtack',
+            hint: hotKeyRegistry.request_togglePin,
+          },
+          {
+            id: 'Duplicate',
+            name: 'Duplicate',
+            action: handleDuplicateRequest,
+            icon: 'copy',
+            hint: hotKeyRegistry.request_showDuplicate,
+          },
+          {
+            id: 'Rename',
+            name: 'Rename',
+            action: onRename,
+            icon: 'edit',
+          },
+          {
+            id: 'Delete',
+            name: 'Delete',
+            action: deleteRequest,
+            icon: 'trash',
+            hint: hotKeyRegistry.request_showDelete,
+          },
+          {
+            id: 'Settings',
+            name: 'Settings',
+            icon: 'gear',
+            hint: hotKeyRegistry.request_showSettings,
+            action: () => {
+              setIsSettingsModalOpen(true);
+            },
+          },
+        ],
+      },
+      ...(actionPlugins.length > 0 ? [
+        {
+          name: 'Plugins',
+          id: 'plugins',
+          icon: 'plug' as IconName,
+          items: actionPlugins.map(plugin => ({
+            id: plugin.label,
+            name: plugin.label,
+            icon: plugin.icon as IconName || 'plug',
+            action: () =>
+              handlePluginClick(plugin),
+          })),
+        },
+      ] : []),
+    ];
+
   return (
-    <Dropdown right={right} ref={ref} onOpen={onOpen}>
-      <DropdownButton>
-        <i className="fa fa-caret-down" />
-      </DropdownButton>
-
-      <DropdownItem onClick={duplicate}>
-        <i className="fa fa-copy" /> Duplicate
-        <DropdownHint keyBindings={hotKeyRegistry.request_showDuplicate} />
-      </DropdownItem>
-
-      {canGenerateCode && (
-        <DropdownItem onClick={generateCode}>
-          <i className="fa fa-code" /> Generate Code
-          <DropdownHint
-            keyBindings={hotKeyRegistry.request_showGenerateCodeEditor}
-          />
-        </DropdownItem>
-      )}
-
-      <DropdownItem onClick={togglePin}>
-        <i className="fa fa-thumb-tack" /> {isPinned ? 'Unpin' : 'Pin'}
-        <DropdownHint keyBindings={hotKeyRegistry.request_togglePin} />
-      </DropdownItem>
-
-      {canGenerateCode && (
-        <DropdownItem onClick={copyAsCurl}>
-          <i className="fa fa-copy" /> Copy as Curl
-        </DropdownItem>
-      )}
-
-      <DropdownItem
-        buttonClass={PromptButton}
-        onClick={deleteRequest}
-        addIcon
+    <Fragment>
+      <MenuTrigger
+        isOpen={isOpen}
+        onOpenChange={isOpen => {
+          isOpen && onOpen();
+          onOpenChange(isOpen);
+        }}
       >
-        <i className="fa fa-trash-o" /> Delete
-        <DropdownHint keyBindings={hotKeyRegistry.request_showDelete} />
-      </DropdownItem>
-
-      {actionPlugins.length > 0 && <DropdownDivider>Plugins</DropdownDivider>}
-      {actionPlugins.map((plugin: RequestAction) => (
-        <DropdownItem
-          key={`${plugin.plugin.name}::${plugin.label}`}
-          value={plugin}
-          onClick={handlePluginClick}
-          stayOpenAfterClick
+        <Button
+          data-testid={`Dropdown-${toKebabCase(request.name)}`}
+          aria-label="Request Actions"
+          className="opacity-0 items-center hover:opacity-100 focus:opacity-100 data-[pressed]:opacity-100 flex group-focus:opacity-100 group-hover:opacity-100 justify-center h-6 aspect-square aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
         >
-          {loadingActions[plugin.label] ? (
-            <i className="fa fa-refresh fa-spin" />
-          ) : (
-            <i className={classnames('fa', plugin.icon || 'fa-code')} />
-          )}
-          {plugin.label}
-        </DropdownItem>
-      ))}
-
-      <DropdownDivider />
-
-      <DropdownItem onClick={handleShowSettings}>
-        <i className="fa fa-wrench" /> Settings
-        <DropdownHint keyBindings={hotKeyRegistry.request_showSettings} />
-      </DropdownItem>
-    </Dropdown>
+          <Icon icon="caret-down" />
+        </Button>
+        <Popover className="min-w-max overflow-y-hidden flex flex-col">
+          <Menu
+            aria-label="Request Actions Menu"
+            selectionMode="single"
+            onAction={key => requestActionList.find(i => i.items.find(a => a.id === key))?.items.find(a => a.id === key)?.action()}
+            items={requestActionList}
+            className="border select-none text-sm min-w-max border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] py-2 rounded-md overflow-y-auto focus:outline-none"
+          >
+            {section => (
+              <Section className='flex-1 flex flex-col'>
+                <Header className='pl-2 py-1 flex items-center gap-2 text-[--hl] text-xs uppercase'>
+                  <Icon icon={section.icon} /> <span>{section.name}</span>
+                </Header>
+                <Collection items={section.items}>
+                  {item => (
+                    <MenuItem
+                      key={item.id}
+                      id={item.id}
+                      className="flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors"
+                      aria-label={item.name}
+                    >
+                      <Icon icon={item.icon} />
+                      <span>{item.name}</span>
+                      {item.hint && (<DropdownHint keyBindings={item.hint} />)}
+                    </MenuItem>
+                  )}
+                </Collection>
+              </Section>
+            )}
+          </Menu>
+        </Popover>
+      </MenuTrigger>
+      {
+        isSettingsModalOpen && (
+          <RequestSettingsModal
+            request={request}
+            onHide={() => setIsSettingsModalOpen(false)}
+          />
+        )
+      }
+    </Fragment >
   );
-});
-
-RequestActionsDropdown.displayName = 'RequestActionsDropdown';
+};

@@ -1,70 +1,17 @@
-import { SvgIcon } from 'insomnia-components';
 import React, { useCallback, useEffect, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { Link } from 'react-aria-components';
 import { useMount, useMountedState } from 'react-use';
-import styled from 'styled-components';
 
-import { SegmentEvent, trackSegmentEvent } from '../../common/analytics';
-import { selectSettings } from '../redux/selectors';
-
-const Wrapper = styled.div({
-  fontSize: 'var(--font-size-xs)',
-  zIndex: 0,
-  marginLeft: -10,
-  display: 'flex',
-  height: '16px',
-  alignSelf: 'center',
-  '& a': {
-    textDecoration: 'none !important',
-    fontWeight: 'normal !important',
-    color: 'var(--hl) !important',
-  },
-  ':hover': {
-    color: 'var(--color-font) !important',
-    cursor: 'pointer',
-  },
-});
-
-const Star = styled.a({
-  width: 42,
-  justifyContent: 'flex-end',
-  backgroundColor: 'var(--hl-xs)',
-  padding: '2px',
-  alignItems: 'center',
-  display: 'flex',
-  border: '1px solid var(--hl-sm)',
-  color: 'var(--hl) !important',
-  ':hover': {
-    borderColor: 'var(--hl-xl)',
-  },
-});
-
-const Icon = styled(SvgIcon)({
-  marginRight: 'var(--padding-xxs)',
-});
-
-const Counter = styled.a({
-  alignItems: 'center',
-  paddingLeft: 4,
-  paddingRight: 5,
-  padding: '0 3px',
-  display: 'flex',
-  fontVariantNumeric: 'tabular-nums',
-  border: '1px solid var(--hl-sm)',
-  borderLeft: 'none',
-  borderRadius: '0 10px 10px 0',
-  ':hover': {
-    color: 'var(--color-surprise) !important',
-  },
-});
+import { getGitHubRestApiUrl } from '../../common/constants';
+import { SegmentEvent } from '../analytics';
+import { Icon } from './icon';
 
 const LOCALSTORAGE_GITHUB_STARS_KEY = 'insomnia:github-stars';
 
 export const GitHubStarsButton = () => {
   const isMounted = useMountedState();
-  const { incognitoMode } = useSelector(selectSettings);
   const localStorageStars = localStorage.getItem(LOCALSTORAGE_GITHUB_STARS_KEY);
-  const initialState = parseInt(localStorageStars || '21700', 10);
+  const initialState = parseInt(localStorageStars || '30000', 10);
   const [starCount, setStarCount] = useState(initialState);
 
   useEffect(() => {
@@ -74,15 +21,11 @@ export const GitHubStarsButton = () => {
   const [error, setError] = useState<Error | null>(null);
 
   useMount(() => {
-    if (incognitoMode) {
-      return;
-    }
-
     if (!isMounted()) {
       return;
     }
 
-    fetch('https://api.github.com/repos/Kong/insomnia')
+    fetch(`${getGitHubRestApiUrl()}/repos/Kong/insomnia`)
       .then(data => data.json())
       .then(info => {
         if (!('watchers' in info)) {
@@ -107,33 +50,48 @@ export const GitHubStarsButton = () => {
   });
 
   const starClick = useCallback(() => {
-    trackSegmentEvent(SegmentEvent.buttonClick, {
-      type: 'GitHub stars',
-      action: 'clicked star',
+    window.main.trackSegmentEvent({
+      event: SegmentEvent.buttonClick,
+      properties: {
+        type: 'GitHub stars',
+        action: 'clicked star',
+      },
     });
   }, []);
 
   const counterClick = useCallback(() => {
-    trackSegmentEvent(SegmentEvent.buttonClick, {
-      type: 'GitHub stars',
-      action: 'clicked stargazers',
+    window.main.trackSegmentEvent({
+      event: SegmentEvent.buttonClick,
+      properties: {
+        type: 'GitHub stars',
+        action: 'clicked stargazers',
+      },
     });
   }, []);
 
-  const shouldShowCount = !Boolean(error) && !incognitoMode;
+  const shouldShowCount = !Boolean(error);
 
   return (
-    <Wrapper>
-      <Star onClick={starClick} href="https://github.com/Kong/insomnia">
-        <Icon icon="github" />
-        Star
-      </Star>
-
-      {shouldShowCount ? (
-        <Counter onClick={counterClick} href="https://github.com/Kong/insomnia/stargazers">
-          {starCount.toLocaleString()}
-        </Counter>
-      ) : null}
-    </Wrapper>
+    <div className="flex select-none rounded-lg divide-x divide-[--hl-md] divide-solid border border-solid border-[--hl-md]">
+      <Link onPress={starClick}>
+        <a
+          href="https://github.com/Kong/insomnia"
+          className="px-4 py-1 rounded-l-lg last-of-type:rounded-r-lg outline-none flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+        >
+          <Icon icon={['fab', 'github']} />
+          Star
+        </a>
+      </Link>
+      {shouldShowCount && (
+        <Link onPress={counterClick}>
+          <a
+            href="https://github.com/Kong/insomnia/stargazers"
+            className="px-4 py-1 rounded-r-lg outline-none flex items-center justify-center gap-2 aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm"
+          >
+            {starCount.toLocaleString()}
+          </a>
+        </Link>
+      )}
+    </div>
   );
 };

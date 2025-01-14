@@ -1,15 +1,15 @@
-import React, { FC, useEffect, useRef } from 'react';
+import React, { type FC, useEffect, useRef } from 'react';
 
-import { clickLink } from '../../../common/electron-helpers';
 import type { ResponseTimelineEntry } from '../../../main/network/libcurl-promise';
-import { CodeEditor, UnconnectedCodeEditor } from '../codemirror/code-editor';
+import { CodeEditor, type CodeEditorHandle } from '../codemirror/code-editor';
 
 interface Props {
   timeline: ResponseTimelineEntry[];
+  pinToBottom?: boolean;
 }
 
-export const ResponseTimelineViewer: FC<Props> = ({ timeline }) => {
-  const editorRef = useRef<UnconnectedCodeEditor>(null);
+export const ResponseTimelineViewer: FC<Props> = ({ timeline, pinToBottom }) => {
+  const editorRef = useRef<CodeEditorHandle>(null);
   const rows = timeline
     .map(({ name, value }, i, all) => {
       const prefixLookup: Record<ResponseTimelineEntry['name'], string> = {
@@ -37,19 +37,21 @@ export const ResponseTimelineViewer: FC<Props> = ({ timeline }) => {
 
   useEffect(() => {
     if (editorRef.current) {
-      editorRef.current.codeMirror?.setValue(rows);
+      editorRef.current?.setValue(rows);
     }
   }, [rows]);
 
   return (
     <CodeEditor
+      id="response-timeline-viewer"
       ref={editorRef}
       hideLineNumbers
       readOnly
-      onClickLink={clickLink}
+      onClickLink={window.main.openInBrowser}
       defaultValue={rows}
       className="pad-left"
       mode="curl"
+      pinToBottom={pinToBottom}
     />
   );
 };

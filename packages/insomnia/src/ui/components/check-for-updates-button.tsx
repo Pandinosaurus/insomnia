@@ -1,69 +1,45 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import * as electron from 'electron';
-import React, { PureComponent, ReactNode } from 'react';
+import React, { useEffect, useState } from 'react';
 
-import { AUTOBIND_CFG } from '../../common/constants';
+import type { UpdateStatus } from '../../main/updates';
+import { Icon } from './icon';
 
-interface Props {
-  children: ReactNode;
-  className?: string | null;
-}
+type UpdateStatusIcon = 'refresh' | 'check' | null;
 
-interface State {
-  status: string;
-  checking: boolean;
-  updateAvailable: boolean;
-}
+export const CheckForUpdatesButton = () => {
+  const [disabled, setDisabled] = useState(false);
+  const [status, setStatus] = useState<UpdateStatus>('Check Now');
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class CheckForUpdatesButton extends PureComponent<Props, State> {
-  state: State = {
-    status: '',
-    checking: false,
-    updateAvailable: false,
-  };
-
-  _listenerCheckComplete(_e: Electron.IpcRendererEvent, updateAvailable: true, status: string) {
-    this.setState({
-      status,
-      updateAvailable,
+  useEffect(() => {
+    const unsubscribe = window.main.on('updaterStatus',
+      (_e: Electron.IpcRendererEvent, status: UpdateStatus) => {
+        setStatus(status);
     });
+    return () => {
+      unsubscribe();
+    };
+  });
+
+  let statusIcon: UpdateStatusIcon = null;
+  if (['Performing backup...', 'Downloading...', 'Checking'].includes(status)) {
+    statusIcon = 'refresh';
+  }
+  if (['Up to Date', 'Updated (Restart Required)'].includes(status)) {
+    statusIcon = 'check';
   }
 
-  _listenerCheckStatus(_e: Electron.IpcRendererEvent, status: string) {
-    if (this.state.checking) {
-      this.setState({
-        status,
-      });
-    }
-  }
-
-  _handleCheckForUpdates() {
-    electron.ipcRenderer.send('updater.check');
-    this.setState({ checking: true });
-  }
-
-  componentDidMount() {
-    electron.ipcRenderer.on('updater.check.status', this._listenerCheckStatus);
-    electron.ipcRenderer.on('updater.check.complete', this._listenerCheckComplete);
-  }
-
-  componentWillUnmount() {
-    electron.ipcRenderer.removeListener('updater.check.complete', this._listenerCheckComplete);
-    electron.ipcRenderer.removeListener('updater.check.status', this._listenerCheckStatus);
-  }
-
-  render() {
-    const { children, className } = this.props;
-    const { status, checking } = this.state;
-    return (
-      <button
-        className={className ?? ''}
-        disabled={checking}
-        onClick={this._handleCheckForUpdates}
-      >
-        {status || children}
-      </button>
-    );
-  }
-}
+  return (
+    <button
+      className="flex items-center gap-2 btn btn--outlined btn--super-compact"
+      disabled={disabled}
+      onClick={() => {
+        window.main.manualUpdateCheck();
+        // this is to prevent initiating update multiple times
+        // if it errors user can restart the app and try again
+        setDisabled(true);
+      }}
+    >
+      {statusIcon && <Icon className={statusIcon === 'refresh' ? 'animate-spin' : ''} icon={statusIcon} />}
+      {status}
+    </button>
+  );
+};

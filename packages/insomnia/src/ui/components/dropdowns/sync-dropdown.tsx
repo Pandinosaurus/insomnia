@@ -1,632 +1,432 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
-import classnames from 'classnames';
-import React, { Fragment, PureComponent } from 'react';
-import { connect } from 'react-redux';
-import { AnyAction, bindActionCreators, Dispatch } from 'redux';
+import type { IconProp } from '@fortawesome/fontawesome-svg-core';
+import React, { type FC, Fragment, useCallback, useEffect, useState } from 'react';
+import { Button, Collection, Menu, MenuItem, MenuTrigger, Popover, Section, Tooltip, TooltipTrigger } from 'react-aria-components';
+import { useFetcher, useParams } from 'react-router-dom';
+import { useInterval } from 'react-use';
 
 import * as session from '../../../account/session';
-import { AUTOBIND_CFG, DEFAULT_BRANCH_NAME } from '../../../common/constants';
-import { database as db } from '../../../common/database';
-import { docsVersionControl } from '../../../common/documentation';
-import { strings } from '../../../common/strings';
-import * as models from '../../../models';
-import { isRemoteProject, Project } from '../../../models/project';
+import { getAppWebsiteBaseURL } from '../../../common/constants';
+import { isOwnerOfOrganization } from '../../../models/organization';
+import type { Project } from '../../../models/project';
 import type { Workspace } from '../../../models/workspace';
-import { Snapshot, Status, StatusCandidate } from '../../../sync/types';
-import { pushSnapshotOnInitialize } from '../../../sync/vcs/initialize-backend-project';
-import { logCollectionMovedToProject } from '../../../sync/vcs/migrate-collections';
-import { BackendProjectWithTeam } from '../../../sync/vcs/normalize-backend-project-team';
-import { pullBackendProject } from '../../../sync/vcs/pull-backend-project';
-import { interceptAccessError } from '../../../sync/vcs/util';
-import { VCS } from '../../../sync/vcs/vcs';
-import { RootState } from '../../redux/modules';
-import { activateWorkspace } from '../../redux/modules/workspace';
-import { selectActiveWorkspaceMeta, selectRemoteProjects, selectSyncItems } from '../../redux/selectors';
-import { Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownDivider } from '../base/dropdown/dropdown-divider';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
-import { Link } from '../base/link';
-import { PromptButton } from '../base/prompt-button';
-import { HelpTooltip } from '../help-tooltip';
+import { useOrganizationLoaderData } from '../../routes/organization';
+import type { SyncDataLoaderData } from '../../routes/remote-collections';
+import { useRootLoaderData } from '../../routes/root';
+import { Icon } from '../icon';
 import { showError, showModal } from '../modals';
-import { LoginModalHandle } from '../modals/login-modal';
+import { AlertModal } from '../modals/alert-modal';
+import { AskModal } from '../modals/ask-modal';
+import { GitRepositorySettingsModal } from '../modals/git-repository-settings-modal';
 import { SyncBranchesModal } from '../modals/sync-branches-modal';
-import { SyncDeleteModal } from '../modals/sync-delete-modal';
 import { SyncHistoryModal } from '../modals/sync-history-modal';
 import { SyncStagingModal } from '../modals/sync-staging-modal';
-import { Tooltip } from '../tooltip';
 
-// Stop refreshing if user hasn't been active in this long
-const REFRESH_USER_ACTIVITY = 1000 * 60 * 10;
-// Refresh dropdown periodically
-const REFRESH_PERIOD = 1000 * 60 * 1;
-
-type ReduxProps = ReturnType<typeof mapStateToProps> & ReturnType<typeof mapDispatchToProps>;
-
-const mapStateToProps = (state: RootState) => ({
-  remoteProjects: selectRemoteProjects(state),
-  syncItems: selectSyncItems(state),
-  workspaceMeta: selectActiveWorkspaceMeta(state),
-});
-
-const mapDispatchToProps = (dispatch: Dispatch<AnyAction>) => {
-  const bound = bindActionCreators({ activateWorkspace }, dispatch);
-  return {
-    handleActivateWorkspace: bound.activateWorkspace,
-  };
-};
-
-interface Props extends ReduxProps {
+interface Props {
   workspace: Workspace;
   project: Project;
-  vcs: VCS;
-  syncItems: StatusCandidate[];
-  className?: string;
+  gitSyncEnabled: boolean;
 }
 
-interface State {
-  currentBranch: string;
-  localBranches: string[];
-  compare: {
-    ahead: number;
-    behind: number;
-  };
-  status: Status;
-  initializing: boolean;
-  historyCount: number;
-  loadingPull: boolean;
-  loadingProjectPull: boolean;
-  loadingPush: boolean;
-  remoteBackendProjects: BackendProjectWithTeam[];
-}
+const ONE_MINUTE_IN_MS = 1000 * 60;
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-class UnconnectedSyncDropdown extends PureComponent<Props, State> {
-  checkInterval: NodeJS.Timeout | null = null;
-  refreshOnNextSyncItems = false;
-  lastUserActivity = Date.now();
+export const SyncDropdown: FC<Props> = ({ gitSyncEnabled }) => {
+  const { organizationId, projectId, workspaceId } = useParams<{ organizationId: string; projectId: string; workspaceId: string }>();
+  const { organizations } = useOrganizationLoaderData();
+  const { userSession } = useRootLoaderData();
+  const currentOrg = organizations.find(organization => (organization.id === organizationId));
+  const [isGitRepoSettingsModalOpen, setIsGitRepoSettingsModalOpen] = useState(false);
+  const [isSyncHistoryModalOpen, setIsSyncHistoryModalOpen] = useState(false);
+  const [isSyncStagingModalOpen, setIsSyncStagingModalOpen] = useState(false);
+  const [isSyncBranchesModalOpen, setIsSyncBranchesModalOpen] = useState(false);
+  const [isWindowFocused, setIsWindowFocused] = useState(true);
 
-  state: State = {
-    localBranches: [],
-    currentBranch: '',
-    compare: {
-      ahead: 0,
-      behind: 0,
-    },
-    historyCount: 0,
-    initializing: true,
-    loadingPull: false,
-    loadingPush: false,
-    loadingProjectPull: false,
+  const pushFetcher = useFetcher();
+  const pullFetcher = useFetcher();
+  const rollbackFetcher = useFetcher();
+  const checkoutFetcher = useFetcher();
+  const syncDataLoaderFetcher = useFetcher<SyncDataLoaderData>();
+  const syncDataActionFetcher = useFetcher();
+
+  useEffect(() => {
+    if (syncDataLoaderFetcher.state === 'idle' && !syncDataLoaderFetcher.data) {
+      syncDataLoaderFetcher.load(`/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/sync-data`);
+    }
+  }, [organizationId, projectId, syncDataLoaderFetcher, workspaceId]);
+
+  const triggerSync = useCallback(() => {
+    const submit = syncDataActionFetcher.submit;
+    submit({}, {
+      method: 'POST',
+      action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/sync-data`,
+    });
+  }, [organizationId, projectId, syncDataActionFetcher.submit, workspaceId]);
+
+  useEffect(() => {
+    const unsubscribe = window.main.on('mainWindowFocusChange', (_, isFocus) => {
+      setIsWindowFocused(isFocus);
+      if (isFocus) {
+        // trigger sync when user comes back to the app
+        triggerSync();
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [triggerSync]);
+
+  useInterval(() => {
+    triggerSync();
+  }, isWindowFocused ? ONE_MINUTE_IN_MS : null);
+
+  const error = checkoutFetcher.data?.error || pullFetcher.data?.error || pushFetcher.data?.error || rollbackFetcher.data?.error;
+
+  useEffect(() => {
+    if (error) {
+      showError({
+        title: 'Sync Error',
+        message: error,
+      });
+    }
+  }, [error]);
+
+  if (syncDataLoaderFetcher.state !== 'idle' && !syncDataLoaderFetcher.data) {
+    return (
+      <Button className="flex items-center h-9 gap-4 px-[--padding-md] w-full aria-pressed:bg-[--hl-sm] rounded-sm text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm">
+        <Icon icon="refresh" className="animate-spin" /> Initializing
+      </Button>
+    );
+  }
+
+  let syncData: Extract<SyncDataLoaderData, { historyCount: number }> = {
     status: {
-      key: 'n/a',
       stage: {},
       unstaged: {},
+      key: '',
     },
-    remoteBackendProjects: [],
+    localBranches: [],
+    remoteBranches: [],
+    currentBranch: '',
+    historyCount: 0,
+    history: [],
+    syncItems: [],
+    compare: { ahead: 0, behind: 0 },
   };
 
-  async refreshMainAttributes(extraState: Partial<State> = {}) {
-    const { vcs, syncItems, workspace, project } = this.props;
+  if (syncDataLoaderFetcher.data && !('error' in syncDataLoaderFetcher.data)) {
+    syncData = syncDataLoaderFetcher.data;
+  }
 
-    if (!vcs.hasBackendProject() && isRemoteProject(project)) {
-      const remoteBackendProjects = await vcs.remoteBackendProjectsInAnyTeam();
-      const matchedBackendProjects = remoteBackendProjects.filter(p => p.rootDocumentId === workspace._id);
-      this.setState({
-        remoteBackendProjects: matchedBackendProjects,
+  const {
+    status,
+    localBranches,
+    remoteBranches,
+    currentBranch,
+    historyCount,
+    history,
+    syncItems,
+    compare: { ahead, behind },
+  } = syncData;
+
+  const canCreateSnapshot = Object.keys(status.stage).length > 0 || Object.keys(status.unstaged).length > 0;
+
+  const canPush = ahead > 0;
+  const canPull = behind > 0;
+  const pullToolTipMsg = canPull
+    ? `There ${behind === 1 ? 'is' : 'are'} ${behind} commit${behind === 1 ? '' : 's'} to pull`
+    : 'No changes to pull';
+  const pushToolTipMsg = canPush
+    ? `There ${ahead === 1 ? 'is' : 'are'} ${ahead} commit${ahead === 1 ? '' : 's'} to push`
+    : 'No changes to push';
+  const snapshotToolTipMsg = canCreateSnapshot ? 'Local changes made' : 'No local changes made';
+
+  const localBranchesActionList: {
+    id: string;
+    name: string;
+    icon: IconProp;
+    isDisabled?: boolean;
+    isActive?: boolean;
+    action: () => void;
+  }[] = localBranches.map(branch => ({
+    id: `checkout-${branch}`,
+    name: branch,
+    icon: 'code-branch',
+    isActive: branch === currentBranch,
+    action: () => {
+      checkoutFetcher.submit({
+        branch,
+      }, {
+        method: 'POST',
+        action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/branch/checkout`,
       });
+    },
+  }));
+
+  const showUpgradePlanModal = () => {
+    const accountId = session.getAccountId();
+    if (!currentOrg || !accountId) {
       return;
     }
-
-    const localBranches = (await vcs.getBranches()).sort();
-    const currentBranch = await vcs.getBranch();
-    const historyCount = await vcs.getHistoryCount();
-    const status = await vcs.status(syncItems, {});
-    const newState: Partial<State> = {
-      status,
-      historyCount,
-      localBranches,
-      currentBranch,
-      ...extraState,
-    };
-
-    // Do the remote stuff
-    if (session.isLoggedIn()) {
-      try {
-        newState.compare = await vcs.compareRemoteBranch();
-      } catch (err) {
-        console.log('Failed to compare remote branches', err.message);
-      }
-    }
-
-    this.setState(prevState => ({ ...prevState, ...newState }));
-  }
-
-  async componentDidMount() {
-    this.setState({
-      initializing: true,
+    const isOwner = isOwnerOfOrganization({
+      organization: currentOrg,
+      accountId: userSession.accountId,
     });
 
-    const { vcs, workspace, workspaceMeta, project } = this.props;
-
-    try {
-      await pushSnapshotOnInitialize({ vcs, workspace, workspaceMeta, project });
-      await this.refreshMainAttributes();
-    } catch (err) {
-      console.log('[sync_menu] Error refreshing sync state', err);
-    } finally {
-      this.setState({
-        initializing: false,
+    isOwner ?
+      showModal(AskModal, {
+        title: 'Upgrade Plan',
+        message: 'Git Sync is only enabled for Team plan or above, please upgrade your plan.',
+        yesText: 'Upgrade',
+        noText: 'Cancel',
+        onDone: async (isYes: boolean) => {
+          if (isYes) {
+            window.main.openInBrowser(`${getAppWebsiteBaseURL()}/app/subscription/update?plan=team`);
+          }
+        },
+      }) : showModal(AlertModal, {
+        title: 'Upgrade Plan',
+        message: 'Git Sync is only enabled for Team plan or above, please ask the organization owner to upgrade.',
       });
-    }
+  };
 
-    // Refresh but only if the user has been active in the last n minutes
-    this.checkInterval = setInterval(async () => {
-      if (Date.now() - this.lastUserActivity < REFRESH_USER_ACTIVITY) {
-        await this.refreshMainAttributes();
-      }
-    }, REFRESH_PERIOD);
-    document.addEventListener('mousemove', this._handleUserActivity);
-  }
+  const switchToGitRepoActionList: {
+    id: string;
+    name: string;
+    icon: IconProp;
+    isDisabled?: boolean;
+    action: () => void;
+  }[] = [
+      {
+        id: 'switch-to-git-repo',
+        name: 'Switch to Git Repository',
+        icon: ['fab', 'git-alt'],
+        action: () => gitSyncEnabled ? setIsGitRepoSettingsModalOpen(true) : showUpgradePlanModal(),
+      },
+    ];
 
-  componentWillUnmount() {
-    if (this.checkInterval !== null) {
-      clearInterval(this.checkInterval);
-    }
-    document.removeEventListener('mousemove', this._handleUserActivity);
-  }
-
-  componentDidUpdate(prevProps: Props) {
-    const { vcs, syncItems } = this.props;
-
-    // Update if new sync items
-    if (syncItems !== prevProps.syncItems) {
-      if (vcs.hasBackendProject()) {
-        vcs.status(syncItems, {}).then(status => {
-          this.setState({
-            status,
+  const syncMenuActionList: {
+    id: string;
+    name: string;
+    icon: IconProp;
+    isDisabled?: boolean;
+    action: () => void;
+  }[] = [
+      {
+        id: 'branches',
+        name: 'Branches',
+        icon: 'code-fork',
+        action: () => setIsSyncBranchesModalOpen(true),
+      },
+      {
+        id: 'history',
+        name: 'History',
+        icon: 'clock',
+        isDisabled: historyCount === 0,
+        action: () => setIsSyncHistoryModalOpen(true),
+      },
+      {
+        id: 'revert',
+        name: 'Discard all changes',
+        icon: 'undo',
+        isDisabled: historyCount === 0 || rollbackFetcher.state !== 'idle' || !canCreateSnapshot,
+        action: () => {
+          rollbackFetcher.submit({}, {
+            method: 'POST',
+            action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/rollback`,
           });
-        });
-      }
-
-      if (this.refreshOnNextSyncItems) {
-        this.refreshMainAttributes();
-        this.refreshOnNextSyncItems = false;
-      }
-    }
-  }
-
-  _handleUserActivity() {
-    this.lastUserActivity = Date.now();
-  }
-
-  _handleShowBranchesModal() {
-    showModal(SyncBranchesModal, {
-      onHide: this.refreshMainAttributes,
-    });
-  }
-
-  _handleShowStagingModal() {
-    showModal(SyncStagingModal, {
-      onSnapshot: async () => {
-        await this.refreshMainAttributes();
+        },
       },
-      handlePush: async () => {
-        await this._handlePushChanges();
+      {
+        id: 'commit',
+        name: 'Commit',
+        icon: 'cube',
+        isDisabled: !canCreateSnapshot || rollbackFetcher.state !== 'idle',
+        action: () => setIsSyncStagingModalOpen(true),
       },
-    });
-  }
+      {
+        id: 'pull',
+        name: pullFetcher.state !== 'idle' ? 'Pulling...' : behind > 0 ? `Pull ${behind || ''} Commit${behind === 1 ? '' : 's'}` : 'Pull',
+        icon: pullFetcher.state !== 'idle' ? 'refresh' : 'cloud-download',
+        isDisabled: behind === 0 || pullFetcher.state !== 'idle',
+        action: () => {
+          pullFetcher.submit({}, {
+            method: 'POST',
+            action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/pull`,
+          });
+        },
+      },
+      {
+        id: 'push',
+        name: pushFetcher.state !== 'idle' ? 'Pushing...' : ahead > 0 ? `Push ${ahead || ''} Commit${ahead === 1 ? '' : 's'}` : 'Push',
+        icon: pushFetcher.state !== 'idle' ? 'refresh' : 'cloud-upload',
+        isDisabled: ahead === 0 || pushFetcher.state !== 'idle',
+        action: () => {
+          pushFetcher.submit({}, {
+            method: 'POST',
+            action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/insomnia-sync/push`,
+          });
+        },
+      },
+    ];
 
-  static _handleShowLoginModal() {
-    showModal(LoginModalHandle);
-  }
+  const isSyncing = checkoutFetcher.state !== 'idle' || pullFetcher.state !== 'idle' || pushFetcher.state !== 'idle' || rollbackFetcher.state !== 'idle';
 
-  async _handlePushChanges() {
-    const { vcs, project: { remoteId } } = this.props;
-    this.setState({
-      loadingPush: true,
-    });
-
-    try {
-      const branch = await vcs.getBranch();
-      await interceptAccessError({
-        callback: async () => await vcs.push(remoteId),
-        action: 'push',
-        resourceName: branch,
-        resourceType: 'branch',
-      });
-    } catch (err) {
-      showError({
-        title: 'Push Error',
-        message: err.message,
-        error: err,
-      });
-    }
-
-    await this.refreshMainAttributes({
-      loadingPush: false,
-    });
-  }
-
-  async _handlePullChanges() {
-    const { vcs, syncItems, project: { remoteId } } = this.props;
-    this.setState({
-      loadingPull: true,
-    });
-
-    try {
-      const branch = await vcs.getBranch();
-      const delta = await interceptAccessError({
-        callback: async () => await vcs.pull(syncItems, remoteId),
-        action: 'pull',
-        resourceName: branch,
-        resourceType: 'branch',
-      });
-      // @ts-expect-error -- TSCONVERSION
-      await db.batchModifyDocs(delta);
-      this.refreshOnNextSyncItems = true;
-    } catch (err) {
-      showError({
-        title: 'Pull Error',
-        message: err.message,
-        error: err,
-      });
-    }
-
-    this.setState({
-      loadingPull: false,
-    });
-  }
-
-  async _handleRollback(snapshot: Snapshot) {
-    const { vcs, syncItems } = this.props;
-    const delta = await vcs.rollback(snapshot.id, syncItems);
-    // @ts-expect-error -- TSCONVERSION
-    await db.batchModifyDocs(delta);
-    this.refreshOnNextSyncItems = true;
-  }
-
-  async _handleRevert() {
-    const { vcs, syncItems } = this.props;
-
-    try {
-      const delta = await vcs.rollbackToLatest(syncItems);
-      // @ts-expect-error -- TSCONVERSION
-      await db.batchModifyDocs(delta);
-    } catch (err) {
-      showError({
-        title: 'Revert Error',
-        message: err.message,
-        error: err,
-      });
-    }
-  }
-
-  _handleShowHistoryModal() {
-    showModal(SyncHistoryModal, {
-      handleRollback: this._handleRollback,
-    });
-  }
-
-  async _handleOpen() {
-    await this.refreshMainAttributes();
-  }
-
-  async _handleEnableSync() {
-    this.setState({
-      loadingProjectPull: true,
-    });
-    const { vcs, workspace } = this.props;
-    await vcs.switchAndCreateBackendProjectIfNotExist(workspace._id, workspace.name);
-    await this.refreshMainAttributes({
-      loadingProjectPull: false,
-    });
-  }
-
-  _handleShowDeleteModal() {
-    showModal(SyncDeleteModal, {
-      onHide: this.refreshMainAttributes,
-    });
-  }
-
-  async _handleSetProject(backendProject: BackendProjectWithTeam) {
-    const { vcs, remoteProjects, project, workspace, handleActivateWorkspace } = this.props;
-    this.setState({
-      loadingProjectPull: true,
-    });
-
-    const pulledIntoProject = await pullBackendProject({ vcs, backendProject, remoteProjects });
-    if (pulledIntoProject._id !== project._id) {
-      // If pulled into a different project, reactivate the workspace
-      await handleActivateWorkspace({ workspaceId: workspace._id });
-      logCollectionMovedToProject(workspace, pulledIntoProject);
-    }
-
-    await this.refreshMainAttributes({
-      loadingProjectPull: false,
-    });
-  }
-
-  async _handleSwitchBranch(branch: string) {
-    const { vcs, syncItems } = this.props;
-
-    try {
-      const delta = await vcs.checkout(syncItems, branch);
-
-      if (branch === DEFAULT_BRANCH_NAME) {
-        const { historyCount } = this.state;
-        const defaultBranchHistoryCount = await vcs.getHistoryCount(DEFAULT_BRANCH_NAME);
-
-        // If the default branch has no snapshots, but the current branch does
-        // It will result in the workspace getting deleted
-        // So we filter out the workspace from the delta to prevent this
-        if (!defaultBranchHistoryCount && historyCount) {
-          delta.remove = delta.remove.filter(e => e?.type !== models.workspace.type);
-        }
-      }
-
-      // @ts-expect-error -- TSCONVERSION
-      await db.batchModifyDocs(delta);
-    } catch (err) {
-      showError({
-        title: 'Branch Switch Error',
-        message: err.message,
-        error: err,
-      });
-    }
-
-    // We can't refresh now because we won't yet have the new syncItems
-    this.refreshOnNextSyncItems = true;
-    // Still need to do this in case sync items don't change
-    this.setState({
-      currentBranch: branch,
-    });
-  }
-
-  renderBranch(branch: string) {
-    const { currentBranch } = this.state;
-    const icon =
-      branch === currentBranch ? <i className="fa fa-tag" /> : <i className="fa fa-empty" />;
-    const isCurrentBranch = branch === currentBranch;
-    return (
-      // @ts-expect-error -- TSCONVERSION
-      <DropdownItem
-        key={branch}
-        onClick={isCurrentBranch ? null : () => this._handleSwitchBranch(branch)}
-        className={classnames({
-          bold: isCurrentBranch,
-        })}
-        title={isCurrentBranch ? null : `Switch to "${branch}"`}
-      >
-        {icon}
-        {branch}
-      </DropdownItem>
-    );
-  }
-
-  renderButton() {
-    const {
-      currentBranch,
-      compare: { ahead, behind },
-      initializing,
-      status,
-      loadingPull,
-      loadingPush,
-    } = this.state;
-    const canPush = ahead > 0;
-    const canPull = behind > 0;
-    const canCreateSnapshot =
-      Object.keys(status.stage).length > 0 || Object.keys(status.unstaged).length > 0;
-    const loadIcon = <i className="fa fa-spin fa-refresh fa--fixed-width" />;
-    const pullToolTipMsg = canPull
-      ? `There ${behind === 1 ? 'is' : 'are'} ${behind} snapshot${behind === 1 ? '' : 's'} to pull`
-      : 'No changes to pull';
-    const pushToolTipMsg = canPush
-      ? `There ${ahead === 1 ? 'is' : 'are'} ${ahead} snapshot${ahead === 1 ? '' : 's'} to push`
-      : 'No changes to push';
-    const snapshotToolTipMsg = canCreateSnapshot ? 'Local changes made' : 'No local changes made';
-
-    if (currentBranch === null) {
-      return <Fragment>Sync</Fragment>;
-    }
-
-    return (
-      <DropdownButton
-        className="btn--clicky-small btn-sync wide text-left overflow-hidden row-spaced"
-        disabled={initializing}
-      >
-        <div className="ellipsis">
-          <i className="fa fa-code-fork space-right" />{' '}
-          {initializing ? 'Initializing...' : currentBranch}
-        </div>
-        <div className="flex space-left">
-          <Tooltip message={snapshotToolTipMsg} delay={800} position="bottom">
-            <i
-              className={classnames('fa fa-cube fa--fixed-width', {
-                'super-duper-faint': !canCreateSnapshot,
-              })}
-            />
-          </Tooltip>
-
-          {/* Only show cloud icons if logged in */}
-          {session.isLoggedIn() && (
-            <Fragment>
-              {loadingPull ? (
-                loadIcon
-              ) : (
-                <Tooltip message={pullToolTipMsg} delay={800} position="bottom">
-                  <i
-                    className={classnames('fa fa-cloud-download fa--fixed-width', {
-                      'super-duper-faint': !canPull,
-                    })}
-                  />
-                </Tooltip>
-              )}
-
-              {loadingPush ? (
-                loadIcon
-              ) : (
-                <Tooltip message={pushToolTipMsg} delay={800} position="bottom">
-                  <i
-                    className={classnames('fa fa-cloud-upload fa--fixed-width', {
-                      'super-duper-faint': !canPush,
-                    })}
-                  />
-                </Tooltip>
-              )}
-            </Fragment>
-          )}
-        </div>
-      </DropdownButton>
-    );
-  }
-
-  render() {
-    if (!session.isLoggedIn()) {
-      return null;
-    }
-
-    const { className, vcs } = this.props;
-    const {
-      localBranches,
-      currentBranch,
-      status,
-      historyCount,
-      loadingPull,
-      loadingPush,
-      loadingProjectPull,
-      remoteBackendProjects,
-      compare: { ahead, behind },
-    } = this.state;
-    const canCreateSnapshot =
-      Object.keys(status.stage).length > 0 || Object.keys(status.unstaged).length > 0;
-    const visibleBranches = localBranches.filter(b => !b.match(/\.hidden$/));
-    const syncMenuHeader = (
-      <DropdownDivider>
-        Insomnia Sync{' '}
-        <HelpTooltip>
-          Sync and collaborate on workspaces{' '}
-          <Link href={docsVersionControl}>
-            <span className="no-wrap">
-              <br />
-              Documentation <i className="fa fa-external-link" />
-            </span>
-          </Link>
-        </HelpTooltip>
-      </DropdownDivider>
-    );
-
-    if (loadingProjectPull) {
-      return (
-        <div className={className}>
-          <button className="btn btn--compact wide">
-            <i className="fa fa-refresh fa-spin" /> Initializing
-          </button>
-        </div>
-      );
-    }
-
-    if (!vcs.hasBackendProject()) {
-      return (
-        <div className={className}>
-          <Dropdown className="wide tall" onOpen={this._handleOpen}>
-            <DropdownButton className="btn btn--compact wide">
-              <i className="fa fa-code-fork " /> Setup Sync
-            </DropdownButton>
-            {syncMenuHeader}
-            {remoteBackendProjects.length === 0 && (
-              <DropdownItem onClick={this._handleEnableSync}>
-                <i className="fa fa-plus-circle" /> Create Locally
-              </DropdownItem>
-            )}
-            {remoteBackendProjects.map(p => (
-              <DropdownItem key={p.id} onClick={() => this._handleSetProject(p)}>
-                <i className="fa fa-cloud-download" /> Pull <strong>{p.name}</strong>
-              </DropdownItem>
-            ))}
-          </Dropdown>
-        </div>
-      );
-    }
-
-    return (
-      <div className={className}>
-        <Dropdown className="wide tall" onOpen={this._handleOpen}>
-          {this.renderButton()}
-
-          {syncMenuHeader}
-
-          {!session.isLoggedIn() && (
-            <DropdownItem onClick={SyncDropdown._handleShowLoginModal}>
-              <i className="fa fa-sign-in" /> Log In
-            </DropdownItem>
-          )}
-
-          <DropdownItem onClick={this._handleShowBranchesModal}>
-            <i className="fa fa-code-fork" />
-            Branches
-          </DropdownItem>
-
-          <DropdownItem onClick={this._handleShowDeleteModal} disabled={historyCount === 0}>
-            <i className="fa fa-remove" />
-            Delete {strings.collection.singular}
-          </DropdownItem>
-
-          <DropdownDivider>Local Branches</DropdownDivider>
-          {visibleBranches.map(this.renderBranch)}
-
-          <DropdownDivider>{currentBranch}</DropdownDivider>
-
-          <DropdownItem onClick={this._handleShowHistoryModal} disabled={historyCount === 0}>
-            <i className="fa fa-clock-o" />
-            History
-          </DropdownItem>
-
-          <DropdownItem
-            onClick={this._handleRevert}
-            buttonClass={PromptButton}
-            stayOpenAfterClick
-            disabled={!canCreateSnapshot || historyCount === 0}
+  const allSyncMenuActionList = [...switchToGitRepoActionList, ...localBranchesActionList, ...syncMenuActionList];
+  const syncError = syncDataLoaderFetcher.data && 'error' in syncDataLoaderFetcher.data ? syncDataLoaderFetcher.data.error : null;
+  return (
+    <Fragment>
+      <MenuTrigger>
+        <div className="flex items-center h-[--line-height-sm] w-full aria-pressed:bg-[--hl-sm] text-[--color-font] hover:bg-[--hl-xs] focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm">
+          <Button
+            aria-label="Insomnia Sync"
+            className="flex-1 flex h-full items-center gap-2 truncate px-[--padding-md]"
           >
-            <i className="fa fa-undo" />
-            Revert Changes
-          </DropdownItem>
+            <Icon
+              icon={syncError ? 'warning' : isSyncing ? 'refresh' : 'cloud'}
+              className={`w-5 ${syncError ? 'text-[--color-warning]' : isSyncing ? 'animate-spin' : ''}`}
+            />
+            <span className={`truncate ${syncError ? 'text-[--color-warning]' : ''}`}>{syncError ? 'Error syncing with Insomnia Cloud' : currentBranch}</span>
+          </Button>
+          <div className="flex items-center h-full">
+            <TooltipTrigger>
+              <Button className="h-full pl-2">
+                <Icon icon="cube" className={`transition-colors ${canCreateSnapshot ? 'text-[--color-warning]' : 'opacity-50'}`} />
+              </Button>
+              <Tooltip
+                placement="top end"
+                offset={8}
+                className="border select-none text-sm max-w-xs border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+              >
+                {snapshotToolTipMsg}
+              </Tooltip>
+            </TooltipTrigger>
+            <TooltipTrigger>
+              <Button className="h-full px-2">
+                <Icon icon="cloud-download" className={`transition-colors ${canPull ? '' : 'opacity-50'} ${pullFetcher.state !== 'idle' ? 'animate-pulse' : ''}`} />
+              </Button>
+              <Tooltip
+                placement="top end"
+                offset={8}
+                className="border select-none text-sm max-w-xs border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+              >
+                {pullToolTipMsg}
+              </Tooltip>
+            </TooltipTrigger>
 
-          <DropdownItem onClick={this._handleShowStagingModal} disabled={!canCreateSnapshot}>
-            <i className="fa fa-cube" />
-            Create Snapshot
-          </DropdownItem>
-
-          <DropdownItem onClick={this._handlePullChanges} disabled={behind === 0 || loadingPull}>
-            {loadingPull ? (
+            <TooltipTrigger>
+              <Button className="h-full pr-[--padding-md]">
+                <Icon icon="cloud-upload" className={`transition-colors ${canPush ? '' : 'opacity-50'} ${pushFetcher.state !== 'idle' ? 'animate-pulse' : ''}`} />
+              </Button>
+              <Tooltip
+                placement="top end"
+                offset={8}
+                className="border select-none text-sm max-w-xs border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] text-[--color-font] px-4 py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+              >
+                {pushToolTipMsg}
+              </Tooltip>
+            </TooltipTrigger>
+          </div>
+        </div>
+        <Popover className="min-w-max max-w-lg overflow-hidden" placement='top end' offset={8}>
+          <Menu
+            aria-label="Insomnia Sync Menu"
+            selectionMode="single"
+            disabledKeys={allSyncMenuActionList.filter(item => item.isDisabled).map(item => item.id)}
+            onAction={key => {
+              const item = allSyncMenuActionList.find(item => item.id === key);
+              item?.action();
+            }}
+            className="border max-w-lg select-none text-sm border-solid border-[--hl-sm] shadow-lg bg-[--color-bg] py-2 rounded-md overflow-y-auto max-h-[85vh] focus:outline-none"
+          >
+            <Section className='border-b border-solid border-[--hl-sm] pb-2'>
+              <Collection items={switchToGitRepoActionList}>
+                {item => (
+                  <MenuItem
+                    textValue={item.name}
+                    className={'group aria-disabled:opacity-30 aria-disabled:cursor-not-allowed flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent disabled:cursor-not-allowed focus:outline-none transition-colors'}
+                    aria-label={item.name}
+                  >
+                    <div className="px-4 text-[--color-font-surprise] w-full bg-opacity-100 bg-[rgba(var(--color-surprise-rgb),var(--tw-bg-opacity))] py-1 font-semibold border border-solid border-[--hl-md] flex items-center justify-center gap-2 aria-pressed:opacity-80 rounded-sm hover:bg-opacity-80 group-pressed:opacity-80 group-hover:bg-opacity-80 group-focus:bg-opacity-80 group-focus:ring-inset group-hover:ring-inset focus:ring-inset ring-1 ring-transparent focus:ring-[--hl-md] transition-all text-sm">
+                      <Icon icon={item.icon} />
+                      <div>{item.name}</div>
+                    </div>
+                  </MenuItem>
+                )}
+              </Collection>
+            </Section>
+            {syncError && (
+              <Section className='border-b border-solid border-[--hl-sm]'>
+                <MenuItem
+                  className={'flex overflow-hidden gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] w-full text-md whitespace-nowrap bg-transparent disabled:cursor-not-allowed focus:outline-none transition-colors'}
+                  aria-label={syncError}
+                >
+                  <Icon icon="exclamation-triangle" className="text-[--color-warning]" />
+                  <p className='whitespace-normal'>{syncError}</p>
+                </MenuItem>
+              </Section>
+            )}
+            {!syncError && (
               <Fragment>
-                <i className="fa fa-spin fa-refresh" /> Pulling Snapshots...
-              </Fragment>
-            ) : (
-              <Fragment>
-                <i className="fa fa-cloud-download" /> Pull {behind || ''} Snapshot
-                {behind === 1 ? '' : 's'}
+                <Section className='border-b border-solid border-[--hl-sm]'>
+                  <Collection items={localBranchesActionList}>
+                    {item => (
+                      <MenuItem
+                        className={`aria-disabled:opacity-30 aria-disabled:cursor-not-allowed flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors ${item.isActive ? 'font-bold' : ''}`}
+                        aria-label={item.name}
+                      >
+                        <Icon icon={item.icon} className={item.isActive ? 'text-[--color-success]' : ''} />
+                        <span className='truncate'>{item.name}</span>
+                      </MenuItem>
+                    )}
+                  </Collection>
+                </Section>
+                <Section>
+                  <Collection items={syncMenuActionList}>
+                    {item => (
+                      <MenuItem
+                        className={'aria-disabled:opacity-30 aria-disabled:cursor-not-allowed flex gap-2 px-[--padding-md] aria-selected:font-bold items-center text-[--color-font] h-[--line-height-xs] w-full text-md whitespace-nowrap bg-transparent hover:bg-[--hl-sm] disabled:cursor-not-allowed focus:bg-[--hl-xs] focus:outline-none transition-colors'}
+                        aria-label={item.name}
+                      >
+                        <Icon icon={item.icon} />
+                        <span>{item.name}</span>
+                      </MenuItem>
+                    )}
+                  </Collection>
+                </Section>
               </Fragment>
             )}
-          </DropdownItem>
-
-          <DropdownItem onClick={this._handlePushChanges} disabled={ahead === 0 || loadingPush}>
-            {loadingPush ? (
-              <Fragment>
-                <i className="fa fa-spin fa-refresh" /> Pushing Snapshots...
-              </Fragment>
-            ) : (
-              <Fragment>
-                <i className="fa fa-cloud-upload" /> Push {ahead || ''} Snapshot
-                {ahead === 1 ? '' : 's'}
-              </Fragment>
-            )}
-          </DropdownItem>
-        </Dropdown>
-      </div>
-    );
-  }
-}
-
-export const SyncDropdown = connect(mapStateToProps, mapDispatchToProps)(UnconnectedSyncDropdown);
+          </Menu>
+        </Popover>
+      </MenuTrigger>
+      {isGitRepoSettingsModalOpen && (
+        <GitRepositorySettingsModal
+          onHide={() => setIsGitRepoSettingsModalOpen(false)}
+        />
+      )}
+      {isSyncBranchesModalOpen && (
+        <SyncBranchesModal
+          branches={localBranches}
+          currentBranch={currentBranch}
+          remoteBranches={remoteBranches.filter(remoteBranch => !localBranches.includes(remoteBranch))}
+          onClose={() => {
+            setIsSyncBranchesModalOpen(false);
+          }}
+        />
+      )}
+      {isSyncStagingModalOpen && (
+        <SyncStagingModal
+          branch={currentBranch}
+          status={status}
+          syncItems={syncItems}
+          onClose={() => setIsSyncStagingModalOpen(false)}
+        />
+      )}
+      {isSyncHistoryModalOpen && (
+        <SyncHistoryModal
+          history={history}
+          onClose={() => setIsSyncHistoryModalOpen(false)}
+        />
+      )}
+    </Fragment>
+  );
+};

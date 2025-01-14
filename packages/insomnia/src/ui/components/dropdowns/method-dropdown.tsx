@@ -1,30 +1,20 @@
 import React, { forwardRef, useCallback, useState } from 'react';
+import { Button } from 'react-aria-components';
 
-import * as constants from '../../../common/constants';
-import { METHOD_GRPC } from '../../../common/constants';
-import { type DropdownHandle, Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownDivider } from '../base/dropdown/dropdown-divider';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
+import { HTTP_METHODS } from '../../../common/constants';
+import { Dropdown, type DropdownHandle, DropdownItem, DropdownSection, ItemContent } from '../base/dropdown';
 import { showPrompt } from '../modals/index';
 
 const LOCALSTORAGE_KEY = 'insomnia.httpMethods';
-const GRPC_LABEL = 'gRPC';
 
 interface Props {
-  className?: string;
   method: string;
   onChange: (method: string) => void;
-  right?: boolean;
-  showGrpc?: boolean;
 }
 
 export const MethodDropdown = forwardRef<DropdownHandle, Props>(({
-  className,
   method,
   onChange,
-  right,
-  showGrpc,
 }, ref) => {
   const localStorageHttpMethods = window.localStorage.getItem(LOCALSTORAGE_KEY);
   const parsedLocalStorageHttpMethods = localStorageHttpMethods ? JSON.parse(localStorageHttpMethods) as string[] : [];
@@ -56,7 +46,7 @@ export const MethodDropdown = forwardRef<DropdownHandle, Props>(({
           return;
         }
         // Don't add base methods
-        if (constants.HTTP_METHODS.includes(methodToAdd)) {
+        if (HTTP_METHODS.includes(methodToAdd)) {
           return;
         }
 
@@ -75,42 +65,39 @@ export const MethodDropdown = forwardRef<DropdownHandle, Props>(({
     });
   }, [method, onChange, recent]);
 
-  const buttonLabel = method === METHOD_GRPC ? GRPC_LABEL : method;
   return (
-    <Dropdown ref={ref} className="method-dropdown" right={right}>
-      <DropdownButton className={className}>
-        <span className={`http-method-${method}`}>{buttonLabel}</span>{' '}
-        <i className="fa fa-caret-down space-left" />
-      </DropdownButton>
-
-      {constants.HTTP_METHODS.map(method => (
-        <DropdownItem
-          key={method}
-          className={`http-method-${method}`}
-          onClick={onChange}
-          value={method}
-        >
-          {method}
-        </DropdownItem>
-      ))}
-
-      {showGrpc && (
-        <>
-          <DropdownDivider />
-          <DropdownItem className="method-grpc" onClick={onChange} value={METHOD_GRPC}>
-            {GRPC_LABEL}
+    <Dropdown
+      ref={ref}
+      triggerButton={
+        <Button className='pl-2'>
+          <span className={`http-method-${method}`}>{method}</span>{' '}
+          <i className="fa fa-caret-down space-left" />
+        </Button>
+      }
+    >
+      <DropdownSection>
+        {HTTP_METHODS.map(method => (
+          <DropdownItem key={method}>
+            <ItemContent
+              className={`http-method-${method}`}
+              label={method}
+              onClick={() => onChange(method)}
+            />
           </DropdownItem>
-        </>
-      )}
+        ))}
+      </DropdownSection>
 
-      <DropdownDivider />
-      <DropdownItem
-        className="http-method-custom"
-        onClick={handleSetCustomMethod}
-      >
-        Custom Method
-      </DropdownItem>
+      <DropdownSection>
+        <DropdownItem>
+          <ItemContent
+            className="http-method-custom"
+            label="Custom Method"
+            onClick={handleSetCustomMethod}
+          />
+        </DropdownItem>
+      </DropdownSection>
     </Dropdown>
   );
 });
+
 MethodDropdown.displayName = 'MethodDropdown';

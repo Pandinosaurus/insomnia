@@ -1,17 +1,18 @@
-import objectPath from 'objectpath';
+import type { EditorFromTextArea, MarkerRange } from 'codemirror';
+import _ from 'lodash';
 
-import type { PluginStore } from '../plugins/context';
-import type { PluginArgumentEnumOption } from './extensions';
+import type { DisplayName, PluginArgumentEnumOption, PluginTemplateTagActionContext } from './extensions';
+import objectPath from './third_party/objectPath';
 
 export interface NunjucksParsedTagArg {
   type: 'string' | 'number' | 'boolean' | 'variable' | 'expression' | 'enum' | 'file' | 'model';
   encoding?: 'base64';
-  value: string | number | boolean;
+  value?: string | number | boolean;
   defaultValue?: string | number | boolean;
   forceVariable?: boolean;
   placeholder?: string;
   help?: string;
-  displayName?: string;
+  displayName?: DisplayName;
   quotedBy?: '"' | "'";
   validate?: (value: any) => string;
   hide?: (arg0: NunjucksParsedTagArg[]) => boolean;
@@ -19,12 +20,13 @@ export interface NunjucksParsedTagArg {
   options?: PluginArgumentEnumOption[];
   itemTypes?: ('file' | 'directory')[];
   extensions?: string[];
+  description?: string;
 }
 
 export interface NunjucksActionTag {
   name: string;
   icon?: string;
-  run: (context: PluginStore) => Promise<void>;
+  run: (context: PluginTemplateTagActionContext) => Promise<void>;
 }
 
 export interface NunjucksParsedTag {
@@ -36,6 +38,8 @@ export interface NunjucksParsedTag {
   description?: string;
   disablePreview?: (arg0: NunjucksParsedTagArg[]) => boolean;
 }
+
+export type NunjucksTagContextMenuAction = 'edit' | 'delete';
 
 interface Key {
   name: string;
@@ -87,7 +91,7 @@ export function normalizeToDotAndBracketNotation(prefix: string) {
 }
 
 /**
- * Parse a Nunjucks tag string into a usable abject
+ * Parse a Nunjucks tag string into a usable object
  * @param {string} tagStr - the template string for the tag
  */
 export function tokenizeTag(tagStr: string) {
@@ -203,7 +207,7 @@ export function unTokenizeTag(tagData: NunjucksParsedTag) {
     if (['string', 'model', 'file', 'enum'].includes(arg.type)) {
       const q = arg.quotedBy || "'";
       const re = new RegExp(`([^\\\\])${q}`, 'g');
-      const str = arg.value.toString().replace(re, `$1\\${q}`);
+      const str = arg.value?.toString().replace(re, `$1\\${q}`);
       args.push(`${q}${str}${q}`);
     } else if (arg.type === 'boolean') {
       args.push(arg.value ? 'true' : 'false');
@@ -275,4 +279,55 @@ export function decodeEncoding<T>(value: T) {
   }
 
   return value;
+}
+
+// because nunjucks only report the first error, we need to extract all missing variables that are not present in the context
+// for example, if the text is `{{ a }} {{ b }}`, nunjucks only report `a` is missing, but we need to report both `a` and `b`
+export function extractUndefinedVariableKey(text: string = '', templatingContext: Record<string, any>): string[] {
+  const regexVariable = /{{\s*([^ }]+)\s*}}/g;
+  const missingVariables: string[] = [];
+  let match;
+
+  while ((match = regexVariable.exec(text)) !== null) {
+    let variable = match[1];
+    if (variable.includes('_.')) {
+      variable = variable.split('_.')[1];
+    }
+    // Check if the variable is not present in the context
+    if (_.get(templatingContext, variable) === undefined) {
+      missingVariables.push(variable);
+    }
+  }
+  return missingVariables;
+}
+
+export function extractNunjucksTagFromCoords(
+  coordinates: { left: number; top: number },
+  cm: React.MutableRefObject<EditorFromTextArea | null>
+): { range: MarkerRange; template: string } | void {
+  if (cm && cm.current) {
+    const { left, top } = coordinates;
+    // get position from left and right position
+    const textMarkerPos = cm.current.coordsChar({ left, top });
+    // get textMarker from position
+    const textMarker = cm.current?.getDoc().findMarksAt(textMarkerPos)[0];
+    if (textMarker) {
+      const range = textMarker.find() as MarkerRange;
+      return {
+        range,
+        // @ts-expect-error __template shoule be property of nunjucks tag markText
+        template: textMarker.__template || '',
+      };
+    }
+  }
+}
+
+export interface nunjucksTagContextMenuOptions extends Exclude<ReturnType<typeof extractNunjucksTagFromCoords>, void> {
+  type: NunjucksTagContextMenuAction;
+}
+
+export const responseTagRegex = new RegExp('{% *response *.* %}');
+
+export function sanitizeStrForWin32(str: string) {
+  return str.replace(/\\/g, '\\\\\\\\');
 }

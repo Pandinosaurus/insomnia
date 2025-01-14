@@ -1,11 +1,8 @@
 import { CurlHttpVersion, CurlNetrc } from '@getinsomnia/node-libcurl';
-import { beforeEach, describe, expect, it } from '@jest/globals';
-import electron from 'electron';
 import fs from 'fs';
-import { HttpVersions } from 'insomnia-common';
 import { join as pathJoin, resolve as pathResolve } from 'path';
+import { beforeEach, describe, expect, it } from 'vitest';
 
-import { globalBeforeEach } from '../../__jest__/before-each';
 import {
   AUTH_AWS_IAM,
   AUTH_BASIC,
@@ -13,10 +10,10 @@ import {
   CONTENT_TYPE_FILE,
   CONTENT_TYPE_FORM_DATA,
   CONTENT_TYPE_FORM_URLENCODED,
-  getAppVersion,
 } from '../../common/constants';
 import { filterHeaders } from '../../common/misc';
 import { getRenderedRequestAndContext } from '../../common/render';
+import { HttpVersions } from '../../common/settings';
 import { _parseHeaders, getHttpVersion } from '../../main/network/libcurl-promise';
 import { DEFAULT_BOUNDARY } from '../../main/network/multipart';
 import { _getAwsAuthHeaders } from '../../main/network/parse-header-strings';
@@ -24,13 +21,10 @@ import * as models from '../../models';
 import * as networkUtils from '../network';
 import { getSetCookiesFromResponseHeaders } from '../network';
 
-window.app = electron.app;
-
 const getRenderedRequest = async (args: Parameters<typeof getRenderedRequestAndContext>[0]) => (await getRenderedRequestAndContext(args)).request;
 
-describe('actuallySend()', () => {
+describe('sendCurlAndWriteTimeline()', () => {
   beforeEach(async () => {
-    await globalBeforeEach();
     await models.project.all();
   });
 
@@ -101,10 +95,13 @@ describe('actuallySend()', () => {
       },
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -130,14 +127,16 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar',
         POST: 1,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/?foo%20bar=hello%26world',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -175,10 +174,13 @@ describe('actuallySend()', () => {
       url: 'http://localhost',
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -199,14 +201,16 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar&bar=&=value',
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
-      },
+        SSL_OPTIONS: 'NativeCa',
+     },
     });
   });
 
@@ -274,10 +278,13 @@ describe('actuallySend()', () => {
       settingSendCookies: false,
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -298,13 +305,15 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar',
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/?foo%20bar=hello%26world',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -333,10 +342,13 @@ describe('actuallySend()', () => {
       },
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -358,15 +370,17 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         INFILESIZE_LARGE: 26,
         PROXY: '',
         READDATA: fs.readFileSync(fileName, 'utf8'),
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         UPLOAD: 1,
         URL: 'http://localhost/',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -412,10 +426,13 @@ describe('actuallySend()', () => {
       },
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -438,6 +455,7 @@ describe('actuallySend()', () => {
           'Accept-Encoding:',
         ],
         INFILESIZE_LARGE: 244,
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         READDATA: [
           `--${DEFAULT_BOUNDARY}`,
@@ -453,11 +471,12 @@ describe('actuallySend()', () => {
           '',
         ].join('\r\n'),
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/',
         UPLOAD: 1,
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -472,10 +491,13 @@ describe('actuallySend()', () => {
       method: 'GET',
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -490,13 +512,15 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://my/path',
         UNIX_SOCKET_PATH: '/my/socket',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -511,10 +535,13 @@ describe('actuallySend()', () => {
       method: 'HEAD',
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -529,12 +556,14 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost:3000/foo/bar',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -549,10 +578,13 @@ describe('actuallySend()', () => {
       method: 'GET',
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -567,12 +599,14 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         URL: 'http://unix:3000/my/path',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -588,10 +622,13 @@ describe('actuallySend()', () => {
       },
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       settings,
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -606,18 +643,24 @@ describe('actuallySend()', () => {
         COOKIEFILE: '',
         FOLLOWLOCATION: true,
         HTTPHEADER: ['Accept: */*', 'Accept-Encoding:', 'content-type:'],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         PROXY: '',
-        TIMEOUT_MS: 0,
+        TIMEOUT_MS: 30000,
         NETRC: CurlNetrc.Required,
         URL: '',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
 
   it('disables ssl verification when configured to do so', async () => {
+    if (process.platform === 'darwin') {
+      // skipped this test, due to SSL_VERIFYHOST being disabled for MacOS on libcurl-promise.ts
+      return;
+    }
     const workspace = await models.workspace.create();
     const settings = await models.settings.getOrCreate();
     const cookies = [
@@ -684,10 +727,13 @@ describe('actuallySend()', () => {
       },
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const response = await networkUtils._actuallySend(
+    const response = await networkUtils.sendCurlAndWriteTimeline(
       renderedRequest,
       [],
+      null,
       { ...settings, validateSSL: false },
+      '/tmp/res_id',
+      'res_id'
     );
     const bodyBuffer = models.response.getBodyBuffer(response);
     const body = JSON.parse(String(bodyBuffer));
@@ -713,16 +759,18 @@ describe('actuallySend()', () => {
           'Accept: */*',
           'Accept-Encoding:',
         ],
+        MAXREDIRS: 10,
         NOPROGRESS: true,
         POSTFIELDS: 'foo=bar',
         POST: 1,
         PROXY: '',
-        SSL_VERIFYHOST: 0, // should disbale SSL
-        SSL_VERIFYPEER: 0, // should disbale SSL
-        TIMEOUT_MS: 0,
+        SSL_VERIFYHOST: 0, // should disable SSL
+        SSL_VERIFYPEER: 0, // should disable SSL
+        TIMEOUT_MS: 30000,
         URL: 'http://localhost/?foo%20bar=hello%26world',
-        USERAGENT: `insomnia/${getAppVersion()}`,
+        USERAGENT: '',
         VERBOSE: true,
+        SSL_OPTIONS: 'NativeCa',
       },
     });
   });
@@ -735,10 +783,13 @@ describe('actuallySend()', () => {
       parentId: workspace._id,
     });
     const renderedRequest = await getRenderedRequest({ request });
-    const responseV1 = await networkUtils._actuallySend(renderedRequest, [], {
+    const responseV1 = await networkUtils.sendCurlAndWriteTimeline(renderedRequest, [], null, {
       ...settings,
       preferredHttpVersion: HttpVersions.V1_0,
-    });
+    },
+      '/tmp/res_id',
+      'res_id'
+    );
     expect(JSON.parse(String(models.response.getBodyBuffer(responseV1))).options.HTTP_VERSION).toBe('V1_0');
     expect(getHttpVersion(HttpVersions.V1_0).curlHttpVersion).toBe(CurlHttpVersion.V1_0);
     expect(getHttpVersion(HttpVersions.V1_1).curlHttpVersion).toBe(CurlHttpVersion.V1_1);
@@ -751,8 +802,6 @@ describe('actuallySend()', () => {
 });
 
 describe('_getAwsAuthHeaders', () => {
-  beforeEach(globalBeforeEach);
-
   it('should generate expected headers', () => {
     const authentication = {
       type: AUTH_AWS_IAM,

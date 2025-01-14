@@ -1,23 +1,16 @@
-import axios from 'axios';
-import { Button } from 'insomnia-components';
 import React, { useEffect, useState } from 'react';
-import { useDispatch } from 'react-redux';
 import { useInterval, useLocalStorage } from 'react-use';
-import styled from 'styled-components';
 
-import { GitRepository } from '../../../../models/git-repository';
-import { axiosRequest } from '../../../../network/axios-request';
+import type { GitRepository } from '../../../../models/git-repository';
 import {
+  exchangeCodeForGitLabToken,
   generateAuthorizationUrl,
   getGitLabOauthApiURL,
   refreshToken,
   signOut,
 } from '../../../../sync/git/gitlab-oauth-provider';
-import {
-  COMMAND_GITLAB_OAUTH_AUTHENTICATE,
-  newCommand,
-} from '../../../redux/modules/global';
-import { showAlert } from '..';
+import { Button } from '../../themed-button';
+import { showAlert, showError } from '..';
 
 interface Props {
   uri?: string;
@@ -59,28 +52,6 @@ export const GitLabRepositorySetupFormGroup = (props: Props) => {
   );
 };
 
-const AccountViewContainer = styled.div({
-  display: 'flex',
-  flexDirection: 'row',
-  justifyContent: 'space-between',
-  border: '1px solid var(--hl-sm)',
-  borderRadius: 'var(--radius-md)',
-  padding: 'var(--padding-sm)',
-  boxSizing: 'border-box',
-});
-
-const AccountDetails = styled.div({
-  display: 'flex',
-  alignItems: 'center',
-  gap: 'var(--padding-sm)',
-});
-
-const AvatarImg = styled.img({
-  borderRadius: 'var(--radius-md)',
-  width: 16,
-  height: 16,
-});
-
 const Avatar = ({ src }: { src: string }) => {
   const [imageSrc, setImageSrc] = useState('');
 
@@ -107,28 +78,11 @@ const Avatar = ({ src }: { src: string }) => {
   }, [src]);
 
   return imageSrc ? (
-    <AvatarImg src={imageSrc} />
+    <img src={imageSrc} className="rounded-md w-8 h-8" />
   ) : (
     <i className="fas fa-user-circle" />
   );
 };
-
-const Details = styled.div({
-  display: 'flex',
-  flexDirection: 'column',
-});
-
-const AuthorizationFormContainer = styled.div({
-  display: 'flex',
-  placeContent: 'center',
-  placeItems: 'center',
-  flexDirection: 'column',
-  height: '100%',
-  border: '1px solid var(--hl-sm)',
-  borderRadius: 'var(--radius-md)',
-  padding: 'var(--padding-sm)',
-  boxSizing: 'border-box',
-});
 
 export interface GitLabUserResult {
   id: number;
@@ -163,23 +117,25 @@ const GitLabRepositoryForm = ({
 
   useEffect(() => {
     if (token && !user) {
-      axiosRequest({
-        method: 'GET',
-        url: `${getGitLabOauthApiURL()}/api/v4/user`,
-        headers: {
+      fetch(`${getGitLabOauthApiURL()}/api/v4/user`, {
+        headers: new Headers({
           Authorization: `Bearer ${token}`,
-        },
-      }).then(({ data }) => {
-        setUser(data);
-      })
-        .catch((error: unknown) => {
-          if (axios.isAxiosError(error) && error.response?.status === 401) {
+        }),
+      }).then(async response => {
+        if (!response.ok) {
+          if (response.status === 401) {
             refreshToken();
           } else {
-            const errorMessage = (error instanceof Error) ? error.message : 'Something went wrong when trying to fetch info from GitLab.';
+            const errorMessage = await response.text() || 'Something went wrong when trying to fetch info from GitLab.';
             setError(errorMessage);
-            console.log(`[gitlab oauth]: ${error}`);
+            console.log(`[gitlab oauth]: ${errorMessage}`);
           }
+        }
+
+        return response.json();
+      })
+        .then(data => {
+          setUser(data);
         });
     }
   }, [token, onSubmit, setUser, user]);
@@ -189,7 +145,8 @@ const GitLabRepositoryForm = ({
       id="gitlab"
       className="form-group"
       style={{ height: '100%' }}
-      onSubmit={event =>
+      onSubmit={event => {
+        event.preventDefault();
         onSubmit({
           uri: (new FormData(event.currentTarget).get('uri') as string) ?? '',
           author: {
@@ -201,13 +158,13 @@ const GitLabRepositoryForm = ({
             token: token ?? '',
             oauth2format: 'gitlab',
           },
-        })
-      }
+        });
+      }}
     >
       {token && (
         <div className="form-control form-control--outlined">
           <label>
-            GitLab URI
+            GitLab URI (https, including .git suffix)
             <input
               className="form-control"
               defaultValue={uri}
@@ -221,10 +178,20 @@ const GitLabRepositoryForm = ({
           </label>
         </div>
       )}
-      <AccountViewContainer>
-        <AccountDetails>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          border: '1px solid var(--hl-sm)',
+          borderRadius: 'var(--radius-md)',
+          padding: 'var(--padding-sm)',
+          boxSizing: 'border-box',
+        }}
+      >
+        <div className="flex gap-2 items-center">
           <Avatar src={user?.avatar_url ?? ''} />
-          <Details>
+          <div className='flex flex-col'>
             <span
               style={{
                 fontSize: 'var(--font-size-lg)',
@@ -239,8 +206,8 @@ const GitLabRepositoryForm = ({
             >
               {user?.commit_email ?? user?.public_email ?? user?.email}
             </span>
-          </Details>
-        </AccountDetails>
+          </div>
+        </div>
         <Button
           type="button"
           onClick={event => {
@@ -260,7 +227,7 @@ const GitLabRepositoryForm = ({
         >
           Sign out
         </Button>
-      </AccountViewContainer>
+      </div>
 
       {error && (
         <p className="notice error margin-bottom-sm">
@@ -281,7 +248,6 @@ interface GitLabSignInFormProps {
 const GitLabSignInForm = ({ token }: GitLabSignInFormProps) => {
   const [authUrl, setAuthUrl] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
-  const dispatch = useDispatch();
 
   // When we get a new token we reset the authenticating flag and auth url. This happens because we can use the generated url for only one authorization flow.
   useEffect(() => {
@@ -299,7 +265,18 @@ const GitLabSignInForm = ({ token }: GitLabSignInFormProps) => {
   }, [authUrl]);
 
   return !authUrl ? (<div />) : (
-    <AuthorizationFormContainer>
+    <div
+      style={{
+        display: 'flex',
+        placeContent: 'center',
+        placeItems: 'center',
+        flexDirection: 'column',
+        border: '1px solid var(--hl-sm)',
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--padding-sm)',
+        boxSizing: 'border-box',
+      }}
+    >
       <a
         href={authUrl}
         onClick={() => {
@@ -323,12 +300,16 @@ const GitLabSignInForm = ({ token }: GitLabSignInFormProps) => {
               const state = parsedURL.searchParams.get('state');
 
               if (typeof code === 'string' && typeof state === 'string') {
-                const command = newCommand(COMMAND_GITLAB_OAUTH_AUTHENTICATE, {
+                exchangeCodeForGitLabToken({
                   code,
                   state,
+                }).catch((error: Error) => {
+                  showError({
+                    error,
+                    title: 'Error authorizing GitLab',
+                    message: error.message,
+                  });
                 });
-
-                command(dispatch);
               }
             }
           }}
@@ -340,11 +321,11 @@ const GitLabSignInForm = ({ token }: GitLabSignInFormProps) => {
             </div>
             <div className="form-row">
               <input name="link" />
-              <Button name="add-token">Add</Button>
+              <Button bg="surprise" name="add-token">Authenticate</Button>
             </div>
           </label>
         </form>
       )}
-    </AuthorizationFormContainer>
+    </div>
   );
 };

@@ -1,7 +1,5 @@
 import classnames from 'classnames';
-import React, { FC, ReactNode, useCallback } from 'react';
-
-import { clickLink } from '../../../common/electron-helpers';
+import React, { type FC, type ReactNode, useCallback } from 'react';
 
 interface Props {
   href: string;
@@ -25,7 +23,7 @@ export const Link: FC<Props> = ({
   const handleClick = useCallback((event: React.MouseEvent<HTMLButtonElement | HTMLAnchorElement>) => {
     event?.preventDefault();
     onClick?.(event); // Also call onClick that was passed to us if there was one
-    clickLink(href);
+    window.main.openInBrowser(href);
   }, [onClick, href]);
 
   if (button) {

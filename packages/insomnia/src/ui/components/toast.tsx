@@ -1,13 +1,8 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
 import classnames from 'classnames';
-import * as electron from 'electron';
-import React, { PureComponent } from 'react';
-import styled from 'styled-components';
+import type { IpcRendererEvent } from 'electron';
+import React, { type FC, useEffect, useState } from 'react';
 
-import * as fetch from '../../account/fetch';
-import * as session from '../../account/session';
 import {
-  AUTOBIND_CFG,
   getAppId,
   getAppPlatform,
   getAppVersion,
@@ -15,7 +10,9 @@ import {
   updatesSupported,
 } from '../../common/constants';
 import * as models from '../../models/index';
+import { insomniaFetch } from '../../ui/insomniaFetch';
 import imgSrcCore from '../images/insomnia-logo.svg';
+import { useRootLoaderData } from '../routes/root';
 import { Link } from './base/link';
 
 const INSOMNIA_NOTIFICATIONS_SEEN = 'insomnia::notifications::seen';
@@ -27,116 +24,54 @@ export interface ToastNotification {
   message: string;
 }
 
-interface State {
-  notification: ToastNotification | null;
-  visible: boolean;
-  productName: string;
-}
-
-const StyledLogo = styled.div`
-  margin: var(--padding-xs) var(--padding-sm) var(--padding-xs) var(--padding-xs);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  img {
-    max-width: 5rem;
-  }
-`;
-const StyledContent = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  padding: 0 var(--padding-xs) 0 var(--padding-xs);
-  max-width: 20rem;
-`;
-const StyledFooter = styled.footer`
-  padding-top: var(--padding-sm);
-  display: flex;
-  flex-direction: row;
-  justify-content: space-between;
-  width: 100%;
-`;
-
 type SeenNotifications = Record<string, boolean>;
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class Toast extends PureComponent<{}, State> {
-  _interval: NodeJS.Timeout | null = null;
-
-  state: State = {
-    notification: null,
-    visible: false,
-    productName: getProductName(),
-  };
-
-  _cancel() {
-    const { notification } = this.state;
-
+export const Toast: FC = () => {
+  const { userSession } = useRootLoaderData();
+  const [notification, setNotification] = useState<ToastNotification | null>(null);
+  const [visible, setVisible] = useState(false);
+  const handleNotification = (notification: ToastNotification | null | undefined) => {
     if (!notification) {
       return;
     }
-
-    this._dismissNotification();
-  }
-
-  _handleNotification(notification: ToastNotification | null | undefined) {
-    if (!notification) {
-      return;
-    }
-
-    const seenNotifications = this._loadSeen();
-
+    let seenNotifications: SeenNotifications = {};
+    try {
+      const storedKeys = window.localStorage.getItem(INSOMNIA_NOTIFICATIONS_SEEN);
+      if (storedKeys) {
+        seenNotifications = JSON.parse(storedKeys) as SeenNotifications || {};
+      }
+    } catch (e) { }
     console.log(`[toast] Received notification ${notification.key}`);
-
     if (seenNotifications[notification.key]) {
       console.log(`[toast] Not showing notification ${notification.key} because has already been seen`);
       return;
     }
-
     seenNotifications[notification.key] = true;
-    const obj = JSON.stringify(seenNotifications, null, 2);
-    window.localStorage.setItem(INSOMNIA_NOTIFICATIONS_SEEN, obj);
-
-    this.setState({
-      notification,
-      visible: false,
-    });
-
+    window.localStorage.setItem(INSOMNIA_NOTIFICATIONS_SEEN, JSON.stringify(seenNotifications, null, 2));
+    setNotification(notification);
+    setVisible(false);
     // Fade the notification in
     setTimeout(() => {
-      this.setState({ visible: true });
+      setVisible(true);
     }, 1000);
-  }
-
-  async _checkForNotifications() {
+  };
+  const checkForNotifications = async () => {
     // If there is a notification open, skip check
-    if (this.state.notification) {
+    if (notification) {
       return;
     }
-
     const stats = await models.stats.get();
     const {
-      allowNotificationRequests,
-      disablePaidFeatureAds,
       disableUpdateNotification,
       updateAutomatically,
       updateChannel,
-    } = await models.settings.getOrCreate();
-
-    if (!allowNotificationRequests) {
-      // if the user has specifically said they don't want to send notification requests, then exit early
-      return;
-    }
-
-    let notification: ToastNotification | null = null;
-
+    } = await models.settings.get();
+    let updatedNotification: ToastNotification | null = null;
     // Try fetching user notification
     try {
       const data = {
         app: getAppId(),
         autoUpdatesDisabled: !updateAutomatically,
-        disablePaidFeatureAds,
         disableUpdateNotification,
         firstLaunch: stats.created,
         launches: stats.launches, // Used for account verification notifications
@@ -145,100 +80,78 @@ export class Toast extends PureComponent<{}, State> {
         updatesNotSupported: !updatesSupported(),
         version: getAppVersion(),
       };
-      const notificationOrEmpty = await fetch.post<ToastNotification>('/notification', data, session.getCurrentSessionId());
+      const notificationOrEmpty = await insomniaFetch<ToastNotification>({
+        method: 'POST',
+        path: '/notification',
+        data,
+        sessionId: userSession.id,
+      });
       if (notificationOrEmpty && typeof notificationOrEmpty !== 'string') {
-        notification = notificationOrEmpty;
+        updatedNotification = notificationOrEmpty;
       }
     } catch (err) {
       console.warn('[toast] Failed to fetch user notifications', err);
     }
+    handleNotification(updatedNotification);
+  };
 
-    this._handleNotification(notification);
-  }
+  useEffect(() => {
+    const unsubscribe = window.main.on('show-notification', (_: IpcRendererEvent, notification: ToastNotification) => handleNotification(notification));
+    return () => unsubscribe();
+  }, []);
 
-  _loadSeen() {
-    try {
-      const storedKeys = window.localStorage.getItem(INSOMNIA_NOTIFICATIONS_SEEN);
-      if (!storedKeys) {
-        return {};
-      }
-
-      return JSON.parse(storedKeys) as SeenNotifications || {};
-    } catch (error) {
-      return {};
-    }
-  }
-
-  _dismissNotification() {
-    const { notification } = this.state;
-
-    if (!notification) {
-      return;
-    }
-
-    // Hide the currently showing notification
-    this.setState({ visible: false });
-
-    // Give time for toast to fade out, then remove it
-    setTimeout(() => {
-      this.setState({ notification: null }, this._checkForNotifications);
-    }, 1000);
-  }
-
-  _listenerShowNotification(_e: Electron.IpcRendererEvent, notification: ToastNotification) {
-    this._handleNotification(notification);
-  }
-
-  componentDidMount() {
-    setTimeout(this._checkForNotifications, 1000 * 10);
-    this._interval = setInterval(this._checkForNotifications, 1000 * 60 * 30);
-    electron.ipcRenderer.on('show-notification', this._listenerShowNotification);
-  }
-
-  componentWillUnmount() {
-    if (this._interval !== null) {
-      clearInterval(this._interval);
-    }
-    electron.ipcRenderer.removeListener('show-notification', this._listenerShowNotification);
-  }
-
-  render() {
-    const { notification, visible, productName } = this.state;
-
-    if (!notification) {
-      return null;
-    }
-
-    return (
-      <div
-        className={classnames('toast theme--dialog', {
-          'toast--show': visible,
-        })}
-      >
-        <StyledLogo>
-          <img src={imgSrcCore} alt={productName} />
-        </StyledLogo>
-        <StyledContent>
-          <p>{notification?.message || 'Unknown'}</p>
-          <StyledFooter>
-            <button
-              className="btn btn--super-duper-compact btn--outlined"
-              onClick={this._cancel}
-            >
-              Dismiss
-            </button>
-            &nbsp;&nbsp;
-            <Link
-              button
-              className="btn btn--super-duper-compact btn--outlined no-wrap"
-              onClick={this._cancel}
-              href={notification.url}
-            >
-              {notification.cta}
-            </Link>
-          </StyledFooter>
-        </StyledContent>
+  const productName = getProductName();
+  return notification ? (
+    <div
+      className={classnames('toast theme--dialog', {
+        'toast--show': visible,
+      })}
+    >
+      <div className="m-[var(--padding-xs)] mr-[var(--padding-sm)] flex items-center justify-center">
+        <img className="max-w-[5rem]" src={imgSrcCore} alt={productName} />
       </div>
-    );
-  }
-}
+      <div className="flex items-center justify-center flex-col px-[var(--padding-xs)] max-w-[20rem]">
+
+        <p>{notification?.message || 'Unknown'}</p>
+        <footer className="pt-[var(--padding-sm)] flex flex-row justify-between w-full">
+
+          <button
+            className="btn btn--super-super-compact btn--outlined"
+            onClick={() => {
+              if (notification) {
+                // Hide the currently showing notification
+                setVisible(false);
+                // Give time for toast to fade out, then remove it
+                setTimeout(() => {
+                  setNotification(null);
+                  checkForNotifications();
+                }, 1000);
+              }
+            }}
+          >
+            Dismiss
+          </button>
+          &nbsp;&nbsp;
+          <Link
+            button
+            className="btn btn--super-super-compact btn--outlined no-wrap"
+            onClick={() => {
+              if (notification) {
+                // Hide the currently showing notification
+                setVisible(false);
+                // Give time for toast to fade out, then remove it
+                setTimeout(() => {
+                  setNotification(null);
+                  checkForNotifications();
+                }, 1000);
+              }
+            }}
+            href={notification.url}
+          >
+            {notification.cta}
+          </Link>
+        </footer>
+      </div>
+    </div>
+  ) : null;
+};

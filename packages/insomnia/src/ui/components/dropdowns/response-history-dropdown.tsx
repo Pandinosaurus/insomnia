@@ -1,18 +1,19 @@
 import { differenceInHours, differenceInMinutes, isThisWeek, isToday } from 'date-fns';
-import React, { Fragment, useCallback, useRef } from 'react';
-import { useSelector } from 'react-redux';
+import React, { useCallback, useRef } from 'react';
+import { Button } from 'react-aria-components';
+import { useFetcher, useRouteLoaderData } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import { decompressObject } from '../../../common/misc';
 import * as models from '../../../models/index';
-import { Response } from '../../../models/response';
-import { isWebSocketResponse, WebSocketResponse } from '../../../models/websocket-response';
-import { updateRequestMetaByParentId } from '../../hooks/create-request';
-import { selectActiveEnvironment, selectActiveRequest, selectActiveRequestResponses, selectRequestVersions } from '../../redux/selectors';
-import { type DropdownHandle, Dropdown } from '../base/dropdown/dropdown';
-import { DropdownButton } from '../base/dropdown/dropdown-button';
-import { DropdownDivider } from '../base/dropdown/dropdown-divider';
-import { DropdownItem } from '../base/dropdown/dropdown-item';
-import { PromptButton } from '../base/prompt-button';
+import { isRequest, type Request } from '../../../models/request';
+import type { Response } from '../../../models/response';
+import type { WebSocketRequest } from '../../../models/websocket-request';
+import { isWebSocketResponse, type WebSocketResponse } from '../../../models/websocket-response';
+import { useRequestMetaPatcher } from '../../hooks/use-request';
+import type { RequestLoaderData, WebSocketRequestLoaderData } from '../../routes/request';
+import type { WorkspaceLoaderData } from '../../routes/workspace';
+import { Dropdown, type DropdownHandle, DropdownItem, DropdownSection, ItemContent } from '../base/dropdown';
 import { useDocBodyKeyboardShortcuts } from '../keydown-binder';
 import { SizeTag } from '../tags/size-tag';
 import { StatusTag } from '../tags/status-tag';
@@ -20,30 +21,30 @@ import { TimeTag } from '../tags/time-tag';
 import { URLTag } from '../tags/url-tag';
 import { TimeFromNow } from '../time-from-now';
 
-interface Props<GenericResponse extends Response | WebSocketResponse> {
-  activeResponse: GenericResponse;
-  className?: string;
-  requestId: string;
-}
-
-export const ResponseHistoryDropdown = <GenericResponse extends Response | WebSocketResponse>({
+export const ResponseHistoryDropdown = ({
   activeResponse,
-  className,
-  requestId,
-}: Props<GenericResponse>) => {
+}: { activeResponse: Response | WebSocketResponse }) => {
+  const { requestId } = useParams() as { requestId: string };
   const dropdownRef = useRef<DropdownHandle>(null);
-  const activeEnvironment = useSelector(selectActiveEnvironment);
-  const responses = useSelector(selectActiveRequestResponses) as GenericResponse[];
-  const activeRequest = useSelector(selectActiveRequest);
-  const requestVersions = useSelector(selectRequestVersions);
+  const patchRequestMeta = useRequestMetaPatcher();
+  const {
+    activeEnvironment,
+  } = useRouteLoaderData(':workspaceId') as WorkspaceLoaderData;
+  const {
+    responses,
+    requestVersions,
+  } = useRouteLoaderData('request/:requestId') as RequestLoaderData | WebSocketRequestLoaderData;
   const now = new Date();
-  const categories: Record<string, GenericResponse[]> = {
+  const categories: Record<string, (Response | WebSocketResponse)[]> = {
     minutes: [],
     hours: [],
     today: [],
     week: [],
     other: [],
   };
+
+  const { organizationId, projectId, workspaceId } = useParams<{ organizationId: string; projectId: string; workspaceId: string }>();
+  const fetcher = useFetcher();
 
   const handleSetActiveResponse = useCallback(async (requestId: string, activeResponse: Response | WebSocketResponse) => {
     if (isWebSocketResponse(activeResponse)) {
@@ -54,111 +55,92 @@ export const ResponseHistoryDropdown = <GenericResponse extends Response | WebSo
       await models.requestVersion.restore(activeResponse.requestVersionId);
     }
 
-    await updateRequestMetaByParentId(requestId, { activeResponseId: activeResponse._id });
-  }, []);
+    await patchRequestMeta(requestId, { activeResponseId: activeResponse._id });
+  }, [patchRequestMeta]);
 
   const handleDeleteResponses = useCallback(async () => {
-    const environmentId = activeEnvironment ? activeEnvironment._id : null;
     if (isWebSocketResponse(activeResponse)) {
       window.main.webSocket.closeAll();
-      await models.webSocketResponse.removeForRequest(requestId, environmentId);
-    } else {
-      await models.response.removeForRequest(requestId, environmentId);
     }
-    if (activeRequest && activeRequest._id === requestId) {
-      await updateRequestMetaByParentId(requestId, { activeResponseId: null });
-    }
-  }, [activeEnvironment, activeRequest, activeResponse, requestId]);
+    fetcher.submit({}, {
+      action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${requestId}/response/delete-all`,
+      method: 'post',
+      encType: 'application/json',
+    });
+  }, [activeResponse, fetcher, organizationId, projectId, requestId, workspaceId]);
 
   const handleDeleteResponse = useCallback(async () => {
-    let response: Response | WebSocketResponse | null = null;
     if (activeResponse) {
       if (isWebSocketResponse(activeResponse)) {
         window.main.webSocket.close({ requestId });
-        await models.webSocketResponse.remove(activeResponse);
-        const environmentId = activeEnvironment?._id || null;
-        response = await models.webSocketResponse.getLatestForRequest(requestId, environmentId);
-      } else {
-        await models.response.remove(activeResponse);
-        const environmentId = activeEnvironment?._id || null;
-        response = await models.response.getLatestForRequest(requestId, environmentId);
       }
-
-      if (response?.requestVersionId) {
-        // Deleting a response restores latest request body
-        await models.requestVersion.restore(response.requestVersionId);
-      }
-
-      await updateRequestMetaByParentId(requestId, { activeResponseId: response?._id || null });
     }
-  }, [activeEnvironment?._id, activeResponse, requestId]);
+    fetcher.submit({ responseId: activeResponse._id }, {
+      action: `/organization/${organizationId}/project/${projectId}/workspace/${workspaceId}/debug/request/${requestId}/response/delete`,
+      method: 'post',
+      encType: 'application/json',
+    });
+  }, [activeResponse, fetcher, requestId, organizationId, projectId, workspaceId]);
 
-  responses.forEach(response => {
+  responses.forEach((response: Response | WebSocketResponse) => {
     const responseTime = new Date(response.created);
-
-    if (differenceInMinutes(now, responseTime) < 5) {
-      categories.minutes.push(response);
-      return;
-    }
-
-    if (differenceInHours(now, responseTime) < 2) {
-      categories.hours.push(response);
-      return;
-    }
-
-    if (isToday(responseTime)) {
-      categories.today.push(response);
-      return;
-    }
-
-    if (isThisWeek(responseTime)) {
-      categories.week.push(response);
-      return;
-    }
-
-    categories.other.push(response);
+    const match = Object.entries({
+      'minutes': differenceInMinutes(now, responseTime) < 5,
+      'hours': differenceInHours(now, responseTime) < 2,
+      'today': isToday(responseTime),
+      'week': isThisWeek(responseTime),
+      'other': true,
+    }).find(([, value]) => value === true)?.[0] || 'other';
+    categories[match].push(response);
   });
 
-  const renderResponseRow = (response: GenericResponse) => {
+  const renderResponseRow = (response: Response | WebSocketResponse) => {
     const activeResponseId = activeResponse ? activeResponse._id : 'n/a';
     const active = response._id === activeResponseId;
     const requestVersion = requestVersions.find(({ _id }) => _id === response.requestVersionId);
-    const request = requestVersion ? decompressObject(requestVersion.compressedRequest) : null;
+    const request = requestVersion ? decompressObject<Request | WebSocketRequest>(requestVersion.compressedRequest) : null;
 
     return (
       <DropdownItem
         key={response._id}
-        disabled={active}
-        onClick={() => handleSetActiveResponse(requestId, response)}
+        aria-label={response._id}
       >
-        {active ? <i className="fa fa-thumb-tack" /> : <i className="fa fa-empty" />}{' '}
-        <StatusTag
-          small
-          statusCode={response.statusCode}
-          statusMessage={response.statusMessage || undefined}
-          tooltipDelay={1000}
+        <ItemContent
+          isDisabled={active}
+          icon={active ? 'thumb-track' : 'empty'}
+          onClick={() => handleSetActiveResponse(requestId, response)}
+          label={
+            <div className='leading-10'>
+              <StatusTag
+                small
+                statusCode={response.statusCode}
+                statusMessage={response.statusMessage || undefined}
+                tooltipDelay={1000}
+              />
+              <URLTag
+                small
+                url={request?.url || ''}
+                method={request && isRequest(request) ? request.method : ''}
+                tooltipDelay={1000}
+              />
+              <TimeTag milliseconds={response.elapsedTime} small tooltipDelay={1000} />
+              {!isWebSocketResponse(response) && (
+                <SizeTag
+                  bytesRead={response.bytesRead}
+                  bytesContent={response.bytesContent}
+                  small
+                  tooltipDelay={1000}
+                />
+              )}
+              {!response.requestVersionId ?
+                <i
+                  className="icon fa fa-info-circle"
+                  title={'Request will not be restored with this response because it was created before this ability was added'}
+                />
+                : null}
+            </div>
+          }
         />
-        <URLTag
-          small
-          url={response.url}
-          method={request ? request.method : ''}
-          tooltipDelay={1000}
-        />
-        <TimeTag milliseconds={response.elapsedTime} small tooltipDelay={1000} />
-        {!isWebSocketResponse(response) && (
-          <SizeTag
-            bytesRead={response.bytesRead}
-            bytesContent={response.bytesContent}
-            small
-            tooltipDelay={1000}
-          />
-        )}
-        {!response.requestVersionId ?
-          <i
-            className="icon fa fa-info-circle"
-            title={'Request will not be restored with this response because it was created before this ability was added'}
-          />
-          : null}
       </DropdownItem>
     );
   };
@@ -172,40 +154,75 @@ export const ResponseHistoryDropdown = <GenericResponse extends Response | WebSo
   return (
     <Dropdown
       ref={dropdownRef}
+      aria-label="Response history dropdown"
       key={activeResponse ? activeResponse._id : 'n/a'}
-      className={className}
+      closeOnSelect={false}
+      className="tall pane__header__right"
+      triggerButton={
+        <Button className="btn btn--super-compact tall">
+          {activeResponse && <TimeFromNow timestamp={activeResponse.created} titleCase />}
+          {!isLatestResponseActive ? (
+            <i className="fa fa-thumb-tack space-left" />
+          ) : (
+            <i className="fa fa-caret-down space-left" />
+          )}
+        </Button>
+      }
     >
-      <DropdownButton className="btn btn--super-compact tall" title="Response history">
-        {activeResponse && <TimeFromNow timestamp={activeResponse.created} titleCase />}
-        {!isLatestResponseActive ? (
-          <i className="fa fa-thumb-tack space-left" />
-        ) : (
-          <i className="fa fa-caret-down space-left" />
-        )}
-      </DropdownButton>
-      <DropdownDivider>
-        <strong>{environmentName}</strong> Responses
-      </DropdownDivider>
-      <DropdownItem buttonClass={PromptButton} addIcon onClick={handleDeleteResponse}>
-        <i className="fa fa-trash-o" />
-        Delete Current Response
-      </DropdownItem>
-      <DropdownItem buttonClass={PromptButton} addIcon onClick={handleDeleteResponses}>
-        <i className="fa fa-trash-o" />
-        Clear History
-      </DropdownItem>
-      <Fragment>
-        <DropdownDivider>Just Now</DropdownDivider>
+      <DropdownSection
+        aria-label={`${environmentName} Responses`}
+        title={<span><strong>{environmentName}</strong> Responses</span>}
+      >
+        <DropdownItem aria-label='Delete Current Response'>
+          <ItemContent
+            icon="trash-o"
+            label="Delete Current Response"
+            onClick={handleDeleteResponse}
+          />
+        </DropdownItem>
+        <DropdownItem aria-label='Clear History'>
+          <ItemContent
+            icon="trash-o"
+            label="Clear History"
+            onClick={handleDeleteResponses}
+          />
+        </DropdownItem>
+      </DropdownSection>
+
+      <DropdownSection
+        aria-label='Minutes Section'
+        title="Just Now"
+      >
         {categories.minutes.map(renderResponseRow)}
-        <DropdownDivider>Less Than Two Hours Ago</DropdownDivider>
+      </DropdownSection>
+
+      <DropdownSection
+        aria-label='Hours Section'
+        title="Less Than Two Hours Ago"
+      >
         {categories.hours.map(renderResponseRow)}
-        <DropdownDivider>Today</DropdownDivider>
+      </DropdownSection>
+
+      <DropdownSection
+        aria-label='Today Section'
+        title="Today"
+      >
         {categories.today.map(renderResponseRow)}
-        <DropdownDivider>This Week</DropdownDivider>
+      </DropdownSection>
+
+      <DropdownSection
+        aria-label='Week Section'
+        title="This Week"
+      >
         {categories.week.map(renderResponseRow)}
-        <DropdownDivider>Older Than This Week</DropdownDivider>
+      </DropdownSection>
+
+      <DropdownSection
+        aria-label='Other Section'
+        title="Older Than This Week"
+      >
         {categories.other.map(renderResponseRow)}
-      </Fragment>
+      </DropdownSection>
     </Dropdown>
   );
 };

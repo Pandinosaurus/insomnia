@@ -1,67 +1,67 @@
-import { autoBindMethodsForReact } from 'class-autobind-decorator';
 import { differenceInMinutes, formatDistanceToNowStrict } from 'date-fns';
-import React, { PureComponent } from 'react';
-
-import { AUTOBIND_CFG } from '../../common/constants';
-import { toTitleCase } from '../../common/misc';
+import React, { type FC, useState } from 'react';
+import { useInterval } from 'react-use';
 
 interface Props {
   timestamp: number | Date | string;
   intervalSeconds?: number;
   className?: string;
   titleCase?: boolean;
+  title?: (text: string) => string;
+}
+const toTitleCase = (value: string) => (
+  value
+    .toLowerCase()
+    .split(' ')
+    .map(value => value.charAt(0).toUpperCase() + value.slice(1))
+    .join(' ')
+);
+
+export function getTimeFromNow(timestamp: string | number | Date, titleCase: boolean): string {
+  const date = new Date(timestamp);
+  let text = formatDistanceToNowStrict(date, { addSuffix: true });
+  const now = new Date();
+  let lessThanOneMinuteAgo;
+  if (now > date) {
+    lessThanOneMinuteAgo = differenceInMinutes(now, date) < 1;
+  } else {
+    lessThanOneMinuteAgo = differenceInMinutes(date, now) < 1;
+  }
+  if (lessThanOneMinuteAgo) {
+    text = 'just now';
+  }
+  if (titleCase) {
+    text = toTitleCase(text);
+  }
+  return text;
 }
 
-interface State {
-  text: string;
+function useTimeNowLabel(
+  timestamp: number | Date | string,
+  titleCase?: boolean,
+  intervalSeconds?: number
+): string {
+  const [text, setText] = useState(getTimeFromNow(timestamp, Boolean(titleCase)));
+
+  useInterval(() => {
+    const newText = getTimeFromNow(timestamp, Boolean(titleCase));
+    setText(newText);
+  }, (intervalSeconds || 5) * 1000);
+
+  return text;
 }
 
-@autoBindMethodsForReact(AUTOBIND_CFG)
-export class TimeFromNow extends PureComponent<Props, State> {
-  _interval: NodeJS.Timeout | null = null;
-
-  state: State = {
-    text: '',
-  };
-
-  _update() {
-    const { timestamp, titleCase } = this.props;
-    const date = new Date(timestamp);
-
-    let text = formatDistanceToNowStrict(date, { addSuffix: true });
-
-    const lessThanOneMinuteAgo = differenceInMinutes(Date.now(), date) < 1;
-    if (lessThanOneMinuteAgo) {
-      text = 'just now';
-    }
-
-    if (titleCase) {
-      text = toTitleCase(text);
-    }
-
-    this.setState({ text });
-  }
-
-  componentDidMount() {
-    const intervalSeconds = this.props.intervalSeconds || 5;
-    this._interval = setInterval(this._update, intervalSeconds * 1000);
-
-    this._update();
-  }
-
-  componentWillUnmount() {
-    if (this._interval !== null) {
-      clearInterval(this._interval);
-    }
-  }
-
-  render() {
-    const { className, timestamp } = this.props;
-    const { text } = this.state;
-    return (
-      <span title={new Date(timestamp).toLocaleString()} className={className}>
-        {text}
-      </span>
-    );
-  }
-}
+export const TimeFromNow: FC<Props> = ({
+  className,
+  timestamp,
+  titleCase,
+  title,
+  intervalSeconds,
+}) => {
+  const text = useTimeNowLabel(timestamp, titleCase, intervalSeconds);
+  return (
+    <span title={title ? title(text) : new Date(timestamp).toLocaleString()} className={className}>
+      {text}
+    </span>
+  );
+};
